@@ -1,6 +1,8 @@
 # 服务层 - 基础设施
-from .llm import LLMService
-from .context import ContextCompressor
-from .mcp import MCPClient
+from .provider import LLMProvider
+from .factory import get_llm_provider
 
-__all__ = ["LLMService", "ContextCompressor", "MCPClient"]
+# 保留旧接口兼容
+from .llm import LLMService
+
+__all__ = ["LLMProvider", "get_llm_provider", "LLMService"]

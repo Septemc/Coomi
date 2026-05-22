@@ -11,7 +11,7 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "typer>=0.9.0",
-    "anthropic>=0.18.0",
+    "openai>=1.6.0",
     "pydantic>=2.5.0",
     "aiofiles>=23.2.0",
     "python-dotenv>=1.0.0",
@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 coomi = "apps.backend.cli.main:app"
+coomi-agent = "run:main"
 
 [tool.ruff]
 line-length = 100
