@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from ..llm.factory import create_fast_provider
 from ..llm.provider import LLMProvider
 from ...types import Message
 from .manager import MemoryManager
@@ -19,7 +20,6 @@ from .types import Memory, MemoryType
 
 # 提取配置
 MAX_ANALYZE_MESSAGES = 10  # 分析最近 N 条消息
-FLASH_MODEL = "deepseek-v4-flash"
 
 EXTRACT_PROMPT = """你是一个记忆提取器。分析以下对话，判断是否有值得长期记忆的信息。
 
@@ -74,17 +74,17 @@ class MemoryExtractor:
         recent = messages[-MAX_ANALYZE_MESSAGES:]
         conversation = self._format_for_analysis(recent)
 
-        # 用 flash 模型判断
-        original_model = self.llm.switch_model(FLASH_MODEL)
+        # 尝试使用 fast_model（如果配置了），否则用当前模型
+        fast_provider = create_fast_provider(self.llm)
+        llm = fast_provider if fast_provider else self.llm
+
         try:
-            response = self.llm.chat(
+            response = llm.chat(
                 messages=[{"role": "user", "content": f"{EXTRACT_PROMPT}\n\n---\n\n{conversation}"}],
                 tools=None,
             )
         except Exception:
-            self.llm.switch_model(original_model)
             return None
-        self.llm.switch_model(original_model)
 
         # 解析 JSON
         content = response.content or ""

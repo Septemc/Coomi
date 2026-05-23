@@ -1,9 +1,27 @@
 """WebSearch 工具 - 搜索网页"""
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import quote
+
+import httpx
 
 from ..base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
+
+_RESULT_RE = re.compile(
+    r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*(?:<[^/][^>]*>[^<]*</[^>]*>)?[^<]*)</a>',
+    re.IGNORECASE,
+)
+_SNIPPET_RE = re.compile(
+    r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+    re.DOTALL | re.IGNORECASE,
+)
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _strip_tags(text: str) -> str:
+    return _TAG_RE.sub("", text).strip()
 
 
 class WebSearchTool(BaseTool):
@@ -41,20 +59,27 @@ class WebSearchTool(BaseTool):
         query = arguments["query"]
 
         try:
-            # 使用 DuckDuckGo 搜索（无需 API key）
-            import httpx
-            from urllib.parse import quote
-
             url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
             response = httpx.get(url, follow_redirects=True, timeout=30)
             response.raise_for_status()
 
-            # 简单解析结果
-            content = response.text
+            html = response.text
 
-            return ToolResult(
-                success=True,
-                output=f"Search results for '{query}':\n\n{content[:3000]}",
-            )
+            result_links = _RESULT_RE.findall(html)
+            snippets = _SNIPPET_RE.findall(html)
+
+            lines = [f"Search results for '{query}':\n"]
+            for i, (href, title) in enumerate(result_links, 1):
+                title_text = _strip_tags(title)
+                snippet_text = _strip_tags(snippets[i - 1]) if i <= len(snippets) else ""
+                lines.append(f"{i}. {title_text}")
+                lines.append(f"   {href}")
+                if snippet_text:
+                    lines.append(f"   {snippet_text}")
+                lines.append("")
+
+            output = "\n".join(lines) if len(lines) > 1 else f"No results found for '{query}'"
+
+            return ToolResult(success=True, output=output[:3000])
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))

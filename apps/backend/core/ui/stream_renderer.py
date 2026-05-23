@@ -1,6 +1,7 @@
 """增量 Markdown 流式渲染器 - 使用 Rich Live 实现瀑布流效果"""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -8,6 +9,8 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
+
+logger = logging.getLogger(__name__)
 
 
 class StreamRenderer:
@@ -50,6 +53,9 @@ class StreamRenderer:
         Args:
             chunk: 文本内容块
         """
+        if not self._started:
+            logger.warning("StreamRenderer.write() called after finish() — data discarded")
+            return
         with self._lock:
             self._buffer += chunk
             now = time.time()

@@ -7,6 +7,8 @@ from typing import Any
 
 from ..base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 
+_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", ".next", "dist", "build", ".tox", ".eggs"}
+
 
 class GrepTool(BaseTool):
     """正则搜索文件内容"""
@@ -76,8 +78,9 @@ class GrepTool(BaseTool):
             files_with_matches = []
             match_count = 0
 
-            # 遍历文件
+            # 遍历文件，排除巨型目录
             for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in _EXCLUDE_DIRS]
                 for file in files:
                     # 应用 glob 过滤
                     if glob_filter:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..llm.factory import create_fast_provider
 from ..llm.provider import LLMProvider
 from .manager import MemoryManager
 from .types import Memory, MemoryType
@@ -11,7 +12,6 @@ from .types import Memory, MemoryType
 
 # 召回配置
 RECALL_LIMIT = 5
-RECALL_MODEL = "deepseek-v4-flash"
 
 
 class MemoryRecall:
@@ -90,21 +90,17 @@ class MemoryRecall:
 示例: [0, 3, 5, 7, 9]"""
 
         try:
-            # 切换到召回模型
-            original_model = self.llm.switch_model(RECALL_MODEL)
+            # 尝试使用 fast_model，否则用当前模型
+            fast_provider = create_fast_provider(self.llm)
+            llm = fast_provider if fast_provider else self.llm
 
-            # 调用 LLM
-            response = self.llm.chat(
+            response = llm.chat(
                 messages=[{"role": "user", "content": prompt}],
-                tools=None,  # 不使用工具
+                tools=None,
             )
-
-            # 恢复原模型
-            self.llm.switch_model(original_model)
 
             # 解析 JSON
             content = response.content or "[]"
-            # 提取 JSON 数组
             import re
             match = re.search(r'\[[\d,\s]*\]', content)
             if match:
@@ -112,7 +108,6 @@ class MemoryRecall:
                 return [i for i in indices if isinstance(i, int)][:limit]
 
         except Exception:
-            # 召回失败，返回前 N 条
             pass
 
         return list(range(min(limit, len(memory_index.split('\n')))))

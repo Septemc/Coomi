@@ -22,6 +22,7 @@ class Message:
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,6 +48,9 @@ class Message:
         if self.tool_call_id:
             msg["tool_call_id"] = self.tool_call_id
 
+        if self.reasoning_content:
+            msg["reasoning_content"] = self.reasoning_content
+
         return msg
 
 
@@ -56,6 +60,7 @@ class LLMResponse:
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
     usage: dict[str, int] | None = None
+    reasoning_content: str | None = None
 
 
 @dataclass

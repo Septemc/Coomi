@@ -89,6 +89,8 @@ class ContextCompressor:
             bool: 是否需要压缩
         """
         threshold = int(context_window_size * COMPRESS_THRESHOLD)
+        if session.last_prompt_tokens > 0:
+            return session.last_prompt_tokens > threshold
         estimated = _estimate_tokens_from_dicts(session.get_messages_for_api())
         return estimated > threshold
 
@@ -110,7 +112,7 @@ class ContextCompressor:
         messages = self._microcompact(messages)
 
         # 检查是否还需要进一步压缩
-        if self._estimate_tokens(messages) < threshold:
+        if _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
             session.messages = messages
             return messages
 
@@ -118,7 +120,7 @@ class ContextCompressor:
         messages = self._trim_old_messages(messages)
 
         # 检查是否还需要进一步压缩
-        if self._estimate_tokens(messages) < threshold:
+        if _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
             session.messages = messages
             return messages
 
@@ -142,7 +144,7 @@ class ContextCompressor:
                     # 替换为清理标记
                     result.append(Message(
                         role="tool",
-                        content="[Old tool result content cleared]",
+                        content="[cleared]",
                         tool_call_id=msg.tool_call_id,
                         created_at=msg.created_at,
                     ))
@@ -200,6 +202,8 @@ class ContextCompressor:
 
             # 恢复最近的工具结果（模拟 Claude Code 的 "restore recently accessed files"）
             recent_tool_results = self._get_recent_tool_results(messages, limit=5)
+            for msg in recent_tool_results:
+                msg.tool_call_id = None  # 清除悬空引用，避免 API 校验失败
             restored_msgs = [summary_msg] + recent_tool_results
 
             return restored_msgs
@@ -232,13 +236,6 @@ class ContextCompressor:
         """获取最近的工具结果消息"""
         tool_results = [msg for msg in messages if msg.role == "tool"]
         return tool_results[-limit:] if tool_results else []
-
-    def _estimate_tokens(self, messages: list[Message]) -> int:
-        """粗略估算消息的 token 数量"""
-        total_chars = sum(len(msg.content or "") for msg in messages)
-        # 英文约 4 chars/token，中文约 1.5 chars/token，取 3 作为安全中间值
-        return max(1, total_chars // 3)
-
 
 def _estimate_tokens_from_dicts(messages: list[dict[str, Any]]) -> int:
     """从 API 格式的消息字典估算 token 数（模块级函数，供 Provider 层共享）

@@ -6,6 +6,19 @@ app = typer.Typer()
 console = Console()
 
 
+def _handle_error(e: Exception, context: str = "") -> None:
+    """统一错误显示"""
+    err_msg = str(e)
+    if hasattr(e, "response"):
+        try:
+            status = e.response.status_code
+            body = e.response.text[:500]
+            err_msg = f"HTTP {status}: {body}"
+        except Exception:
+            pass
+    console.print(f"\n[red]Error ({context}): {err_msg}[/red]")
+
+
 @app.command()
 def chat(message: str = typer.Argument(..., help="发送给Agent的消息")):
     """与Agent对话"""
@@ -20,10 +33,13 @@ def chat(message: str = typer.Argument(..., help="发送给Agent的消息")):
     console.print(f"[bold blue]You:[/bold blue] {message}")
     console.print("[bold green]Agent:[/bold green] ", end="")
 
-    for chunk in llm.chat_stream(messages):
-        console.print(chunk, end="", highlight=False)
+    try:
+        for chunk in llm.chat_stream(messages):
+            console.print(chunk, end="", highlight=False)
+    except Exception as e:
+        _handle_error(e, "chat")
 
-    console.print()  # 换行
+    console.print()
 
 
 @app.command()
@@ -50,9 +66,12 @@ def interactive():
         console.print("[bold green]Agent:[/bold green] ", end="")
 
         full_response = ""
-        for chunk in llm.chat_stream(messages):
-            console.print(chunk, end="", highlight=False)
-            full_response += chunk
+        try:
+            for chunk in llm.chat_stream(messages):
+                console.print(chunk, end="", highlight=False)
+                full_response += chunk
+        except Exception as e:
+            _handle_error(e, "chat_stream")
 
         messages.append({"role": "assistant", "content": full_response})
         console.print()

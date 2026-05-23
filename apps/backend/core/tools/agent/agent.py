@@ -44,12 +44,8 @@ class AgentTool(BaseTool):
         description = arguments["description"]
         prompt = arguments["prompt"]
 
-        try:
-            # 简化实现：直接返回提示信息
-            # 实际应用中需要创建子 Agent 并执行
-            return ToolResult(
-                success=True,
-                output=f"Subagent task '{description}' would be executed with prompt:\n{prompt}",
-            )
-        except Exception as e:
-            return ToolResult(success=False, output="", error=str(e))
+        return ToolResult(
+            success=False,
+            output="",
+            error="AgentTool 尚未实现，请直接执行任务而非委托给子 Agent",
+        )

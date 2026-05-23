@@ -34,12 +34,12 @@ def format_tool_display(name: str, arguments: dict[str, Any] | None = None) -> s
             return f"{name} {file_path}"
         return name
 
-    elif name == "Bash":
+    elif name in ("Bash", "PowerShell"):
         command = args.get("command", "")
         if command:
             cmd_short = command[:80] + "..." if len(command) > 80 else command
-            return f"Bash: {cmd_short}"
-        return "Bash"
+            return f"{name}: {cmd_short}"
+        return name
 
     elif name == "Glob":
         pattern = args.get("pattern", "")

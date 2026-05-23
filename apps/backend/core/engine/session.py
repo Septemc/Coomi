@@ -95,11 +95,21 @@ SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "\n\n__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__\n\n"
 class SessionManager:
     """会话管理器"""
 
+    MAX_SESSIONS = 50
+
     def __init__(self):
         self._sessions: dict[str, Session] = {}
 
+    def _evict_oldest(self) -> None:
+        """驱逐最旧的会话，确保不超过上限"""
+        if len(self._sessions) < self.MAX_SESSIONS:
+            return
+        oldest = min(self._sessions.values(), key=lambda s: s.created_at)
+        del self._sessions[oldest.id]
+
     def create_session(self, system_prompt: str = "You are a helpful assistant") -> Session:
         """创建新会话"""
+        self._evict_oldest()
         session = Session(
             id=str(uuid.uuid4()),
             system_prompt=system_prompt,
@@ -133,10 +143,11 @@ def add_assistant_message(
     session: Session,
     content: str | None,
     tool_calls: list[ToolCall] | None = None,
+    reasoning_content: str | None = None,
 ) -> None:
     """添加助手消息"""
     session.messages.append(
-        Message(role="assistant", content=content, tool_calls=tool_calls)
+        Message(role="assistant", content=content, tool_calls=tool_calls, reasoning_content=reasoning_content)
     )
 
 

@@ -8,6 +8,8 @@ from apps.backend.core.services.memory import MemoryManager, MemoryRecall, Memor
 from apps.backend.core.services.memory.extractor import MemoryExtractor
 from apps.backend.core.services.memory.types import Memory
 from apps.backend.core.services import get_llm_provider
+from apps.backend.core.services.llm.config import ConfigManager
+from apps.backend.core.services.llm.factory import get_config_manager
 from apps.backend.core.tools.registry import create_default_registry
 from apps.backend.core.services.context.compressor import _estimate_tokens_from_dicts
 from apps.backend.core.ui.stream_renderer import StreamRenderer
@@ -18,26 +20,52 @@ from rich.console import Console
 console = Console()
 
 
-def handle_model_command(provider, status_line: StatusLine, args: str) -> None:
-    """处理 /model 命令
+def handle_model_command(config_mgr, status_line: StatusLine, ctx: dict, args: str) -> None:
+    """处理 /model 命令 — 列出/切换模型
 
     Args:
-        provider: LLM Provider 实例
+        config_mgr: ConfigManager 实例
         status_line: 状态栏实例
-        args: 命令参数（模型名称或别名）
+        ctx: 可变上下文（含 provider, agent, memory_extractor, memory_recall）
+        args: 命令参数（provider ID 或为空）
     """
     if not args:
-        # 显示当前模型
-        name = provider.model if hasattr(provider, "model") else "unknown"
-        display = provider.get_model_display_name()
-        console.print(f"[bold cyan]当前模型:[/bold cyan] {display} ([dim]{name}[/dim])")
-        console.print("[dim]可用别名: pro, flash, dsv4pro, dsv4flash[/dim]")
+        # 列出所有可用模型
+        providers = config_mgr.list_providers()
+        active_id = config_mgr.data.get("active", "")
+        if not providers:
+            console.print("[dim]没有配置任何模型。[/dim]")
+            console.print(f"[dim]请编辑 {config_mgr.get_config_path_str()} 添加配置。[/dim]")
+            return
+
+        console.print(f"[bold cyan]可用模型 ({len(providers)} 个):[/bold cyan]")
+        for p in providers:
+            marker = " [bold green](当前)[/bold green]" if p.id == active_id else ""
+            fast_info = f" [dim](fast: {p.fast_model})[/dim]" if p.fast_model else ""
+            console.print(f"  [bold]{p.id}[/bold]: {p.display} ({p.type}){fast_info}{marker}")
+        console.print("[dim]切换: /model <id>[/dim]")
         return
 
-    new_model = provider.switch_model(args)
-    display = provider.get_model_display_name()
-    status_line.set_model(new_model, display)
-    console.print(f"[bold cyan]已切换到:[/bold cyan] {display} ([dim]{new_model}[/dim])")
+    # 切换到指定 provider
+    provider_id = args.strip()
+    if not config_mgr.set_active(provider_id):
+        console.print(f"[red]未找到模型: {provider_id}[/red]")
+        console.print("[dim]使用 /model 查看可用列表[/dim]")
+        return
+
+    # 创建新 provider 并同步更新所有引用
+    new_provider = get_llm_provider(provider_id)
+    ctx["provider"] = new_provider
+    ctx["agent"].llm = new_provider
+    ctx["agent"].compressor.llm = new_provider
+    if ctx.get("memory_extractor"):
+        ctx["memory_extractor"].llm = new_provider
+    if ctx.get("memory_recall"):
+        ctx["memory_recall"].llm = new_provider
+
+    status_line.set_model(new_provider.model, new_provider.get_model_display_name())
+    ctx["display_name"] = new_provider.get_model_display_name()
+    console.print(f"[bold cyan]已切换到:[/bold cyan] {new_provider.get_model_display_name()} ([dim]{new_provider.model}[/dim])")
 
 
 def handle_context_command(status_line: StatusLine, agent: AgentLoop, args: str) -> None:
@@ -70,6 +98,9 @@ def handle_context_command(status_line: StatusLine, agent: AgentLoop, args: str)
         size = int(size_str) * multiplier
         if size < 1_000:
             console.print("[red]上下文窗口至少 1K tokens[/red]")
+            return
+        if size > 10_000_000:
+            console.print("[red]上下文窗口最大 10M tokens[/red]")
             return
         status_line.set_context_window_size(size)
         agent.context_window_size = size
@@ -195,6 +226,9 @@ def handle_memory_command(memory_manager: MemoryManager, args: str) -> None:
 
 
 def main():
+    # 初始化配置
+    config_mgr = get_config_manager()
+
     # 初始化组件
     provider = get_llm_provider()
     tool_registry = create_default_registry()
@@ -212,9 +246,19 @@ def main():
     display_name = provider.get_model_display_name()
     status_line.set_model(model_name, display_name)
 
+    # 可变上下文（用于 /model 切换时同步更新所有引用）
+    ctx = {
+        "provider": provider,
+        "agent": None,  # 下面创建后回填
+        "memory_extractor": memory_extractor,
+        "memory_recall": memory_recall,
+        "display_name": display_name,
+    }
+
     # 创建 Agent（使用默认上下文窗口）
     context_window_size = status_line.get_context_window_size()
     agent = AgentLoop(provider, tool_registry, context_window_size)
+    ctx["agent"] = agent
 
     # 构建含记忆的 System Prompt
     system_prompt = build_system_prompt(
@@ -245,33 +289,35 @@ def main():
 
         # 处理 /model 命令
         stripped = user_input.strip()
-        if stripped.startswith("/model"):
+        if stripped == "/model" or stripped.startswith("/model "):
             args = stripped[6:].strip()
-            handle_model_command(provider, status_line, args)
+            handle_model_command(config_mgr, status_line, ctx, args)
             continue
 
         # 处理 /context 命令
-        if stripped.startswith("/context"):
+        if stripped == "/context" or stripped.startswith("/context "):
             args = stripped[8:].strip()
             handle_context_command(status_line, agent, args)
             continue
 
         # 处理 /memory 命令
-        if stripped.startswith("/memory"):
+        if stripped == "/memory" or stripped.startswith("/memory "):
             args = stripped[7:].strip()
             handle_memory_command(memory_manager, args)
             continue
 
         # 处理 /clear 命令
         if stripped == "/clear":
+            old_id = session.id
             system_prompt = build_system_prompt(
                 memory_manager=memory_manager,
                 memory_recall=memory_recall,
                 current_context="",
                 cwd=current_dir,
-                model_display=display_name,
+                model_display=ctx["display_name"],
             )
             session = session_manager.create_session(system_prompt=system_prompt)
+            session_manager.delete_session(old_id)
             console.print("[dim]会话已清除[/dim]\n")
             continue
 
@@ -281,7 +327,7 @@ def main():
             memory_recall=memory_recall,
             current_context=user_input,
             cwd=current_dir,
-            model_display=display_name,
+            model_display=ctx["display_name"],
         )
 
         # 流式输出 Agent 响应
@@ -323,8 +369,7 @@ def main():
                         renderer.start()
 
                     elif chunk_type == "usage":
-                        # 更新状态栏（不立即渲染，等最后统一渲染）
-                        pass
+                        status_line.update_usage(chunk["data"])
 
                 elif isinstance(chunk, str):
                     renderer.write(chunk)

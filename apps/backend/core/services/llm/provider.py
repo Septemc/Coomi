@@ -2,29 +2,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Iterator
 
 from ...types import LLMResponse
 
 
-class ToolCallMode(Enum):
-    """工具调用模式"""
-    NATIVE = "native"      # 原生工具调用 (OpenAI-compatible)
-    JSON = "json"          # JSON 降级方案
-
-
 class LLMProvider(ABC):
     """LLM Provider 抽象基类 - 所有厂商实现必须继承"""
-
-    @abstractmethod
-    def get_tool_call_mode(self) -> ToolCallMode:
-        """返回支持的工具调用模式
-
-        Returns:
-            ToolCallMode: 原生工具调用或 JSON 降级方案
-        """
-        pass
 
     @abstractmethod
     def chat(
