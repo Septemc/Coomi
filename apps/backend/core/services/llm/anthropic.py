@@ -1,12 +1,13 @@
 """Anthropic Provider 实现"""
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Iterator
 
 import anthropic
 
-from ..types import LLMResponse, ToolCall
+from ...types import LLMResponse, ToolCall
 from .provider import LLMProvider
 
 
@@ -173,7 +174,11 @@ class AnthropicProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> Iterator[dict[str, Any]]:
-        """流式输出 + 工具调用"""
+        """流式输出 + 工具调用
+
+        使用 Anthropic SDK streaming API，正确累积 tool_use JSON 片段，
+        通过 get_final_message() 获取 usage，不发起重复 API 调用。
+        """
         system, converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools)
 
@@ -189,34 +194,54 @@ class AnthropicProvider(LLMProvider):
         if converted_tools:
             params["tools"] = converted_tools
 
-        # 使用流式 API
+        # 累积流式 tool_use JSON 片段，keyed by content block index
+        tool_input_accum: dict[int, dict[str, Any]] = {}
+
         with self.client.messages.stream(**params) as stream:
             for event in stream:
                 if event.type == "content_block_start":
                     if event.content_block.type == "tool_use":
-                        # 工具调用开始
-                        pass
+                        tool_input_accum[event.index] = {
+                            "id": event.content_block.id,
+                            "name": event.content_block.name,
+                            "json_fragments": [],
+                        }
                 elif event.type == "content_block_delta":
                     if event.delta.type == "text_delta":
                         yield {"type": "content", "content": event.delta.text}
                     elif event.delta.type == "input_json_delta":
-                        # 工具输入 JSON 片段
-                        pass
-                elif event.type == "content_block_stop":
-                    pass
+                        idx = event.index
+                        if idx in tool_input_accum:
+                            tool_input_accum[idx]["json_fragments"].append(
+                                event.delta.partial_json
+                            )
 
-        # 最终获取完整响应以提取工具调用
-        # 注意：Anthropic 的流式 API 处理工具调用比较复杂
-        # 这里简化处理，使用非流式方式获取工具调用
-        response = self.client.messages.create(**params)
+            # 流结束后获取最终消息，包含 usage 信息
+            final_msg = stream.get_final_message()
 
-        for block in response.content:
-            if block.type == "tool_use":
-                yield {
-                    "type": "tool_call",
-                    "data": {
-                        "id": block.id,
-                        "name": block.name,
-                        "arguments": block.input,
-                    },
-                }
+        # 输出 usage
+        if final_msg.usage:
+            yield {
+                "type": "usage",
+                "data": {
+                    "prompt_tokens": final_msg.usage.input_tokens,
+                    "completion_tokens": final_msg.usage.output_tokens,
+                    "total_tokens": final_msg.usage.input_tokens + final_msg.usage.output_tokens,
+                },
+            }
+
+        # 输出累积的工具调用
+        for idx in sorted(tool_input_accum.keys()):
+            acc = tool_input_accum[idx]
+            try:
+                arguments = json.loads("".join(acc["json_fragments"]))
+            except (json.JSONDecodeError, KeyError):
+                arguments = {}
+            yield {
+                "type": "tool_call",
+                "data": {
+                    "id": acc["id"],
+                    "name": acc["name"],
+                    "arguments": arguments,
+                },
+            }

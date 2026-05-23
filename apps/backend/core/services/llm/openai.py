@@ -1,4 +1,4 @@
-"""DeepSeek Provider 实现"""
+"""OpenAI Provider 实现"""
 from __future__ import annotations
 
 import json
@@ -7,48 +7,29 @@ from typing import Any, Iterator
 
 from openai import OpenAI
 
-from ..types import LLMResponse, ToolCall
-from .provider import LLMProvider, ToolCallMode
-
-# 模型别名映射
-MODEL_ALIASES: dict[str, str] = {
-    "pro": "deepseek-v4-pro",
-    "flash": "deepseek-v4-flash",
-    "dsv4pro": "deepseek-v4-pro",
-    "dsv4flash": "deepseek-v4-flash",
-    "v4pro": "deepseek-v4-pro",
-    "v4flash": "deepseek-v4-flash",
-}
+from ...types import LLMResponse, ToolCall
+from .provider import LLMProvider
 
 
-class DeepSeekProvider(LLMProvider):
-    """DeepSeek LLM Provider"""
+class OpenAIProvider(LLMProvider):
+    """OpenAI LLM Provider"""
 
     def __init__(self):
-        self.client = OpenAI(
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        )
-        self.model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
-        # 判断是否为 flash 模型
-        self.is_flash = "flash" in self.model.lower()
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-    def get_tool_call_mode(self) -> ToolCallMode:
-        """返回支持的工具调用模式"""
+    def get_tool_call_mode(self):
+        from .provider import ToolCallMode
         return ToolCallMode.NATIVE
 
     def switch_model(self, model_name: str) -> str:
         """运行时切换模型"""
-        resolved = MODEL_ALIASES.get(model_name.lower().strip(), model_name)
-        self.model = resolved
-        self.is_flash = "flash" in self.model.lower()
+        self.model = model_name
         return self.model
 
     def get_model_display_name(self) -> str:
         """获取人类可读的模型显示名称"""
-        if self.is_flash:
-            return "DeepSeek V4 Flash"
-        return "DeepSeek V4 Pro"
+        return self.model.upper()
 
     def chat(
         self,
@@ -57,8 +38,6 @@ class DeepSeekProvider(LLMProvider):
         **kwargs,
     ) -> LLMResponse:
         """同步调用"""
-        tool_choice = kwargs.get("tool_choice", "auto")
-
         params: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -66,12 +45,6 @@ class DeepSeekProvider(LLMProvider):
 
         if tools:
             params["tools"] = tools
-            params["tool_choice"] = tool_choice
-            # 使用原生工具调用时禁用 thinking mode，避免 reasoning_content 传回问题
-            params["extra_body"] = {"thinking": {"type": "disabled"}}
-        else:
-            # 没有工具时可以启用 thinking mode
-            params["extra_body"] = {"thinking": {"type": "enabled"}}
 
         response = self.client.chat.completions.create(**params)
 
@@ -110,8 +83,6 @@ class DeepSeekProvider(LLMProvider):
             model=self.model,
             messages=messages,
             stream=True,
-            reasoning_effort="high",
-            extra_body={"thinking": {"type": "enabled"}},
         )
         for chunk in response:
             if chunk.choices[0].delta.content:
@@ -124,8 +95,6 @@ class DeepSeekProvider(LLMProvider):
         **kwargs,
     ) -> Iterator[dict[str, Any]]:
         """流式输出 + 工具调用"""
-        tool_choice = kwargs.get("tool_choice", "auto")
-
         params: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -135,12 +104,6 @@ class DeepSeekProvider(LLMProvider):
 
         if tools:
             params["tools"] = tools
-            params["tool_choice"] = tool_choice
-            # 使用原生工具调用时禁用 thinking mode，避免 reasoning_content 传回问题
-            params["extra_body"] = {"thinking": {"type": "disabled"}}
-        else:
-            # 没有工具时可以启用 thinking mode
-            params["extra_body"] = {"thinking": {"type": "enabled"}}
 
         response = self.client.chat.completions.create(**params)
 

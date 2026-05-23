@@ -22,6 +22,7 @@ class Message:
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为API格式"""
@@ -74,6 +75,7 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     current_model: str | None = None
+    last_prompt_tokens: int = 0  # 最近一次 API 调用的 prompt_tokens（真实值）
 
     def get_messages_for_api(self) -> list[dict[str, Any]]:
         """获取API格式的消息列表"""

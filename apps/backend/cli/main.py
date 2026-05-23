@@ -9,7 +9,7 @@ console = Console()
 @app.command()
 def chat(message: str = typer.Argument(..., help="发送给Agent的消息")):
     """与Agent对话"""
-    from apps.backend.core.services.llm import LLMService
+    from apps.backend.core.services.llm.llm import LLMService
 
     llm = LLMService()
     messages = [
@@ -29,7 +29,7 @@ def chat(message: str = typer.Argument(..., help="发送给Agent的消息")):
 @app.command()
 def interactive():
     """进入交互模式"""
-    from apps.backend.core.services.llm import LLMService
+    from apps.backend.core.services.llm.llm import LLMService
 
     llm = LLMService()
     messages = [{"role": "system", "content": "You are a helpful assistant"}]

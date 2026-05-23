@@ -66,6 +66,9 @@ htmlcov/
 # Claude Code
 .claude/
 
-# 敏感文件
+# Sensitive files (keys, tokens, test scripts)
 reference/
 scripts/
+
+# Coomi agent data
+.coomi/

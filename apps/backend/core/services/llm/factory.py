@@ -26,7 +26,7 @@ def get_llm_provider(provider: str | None = None) -> LLMProvider:
         return DeepSeekProvider()
 
     elif provider == "openai":
-        from .openai_provider import OpenAIProvider
+        from .openai import OpenAIProvider
         return OpenAIProvider()
 
     elif provider == "anthropic":

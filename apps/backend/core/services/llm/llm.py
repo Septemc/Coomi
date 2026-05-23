@@ -8,10 +8,10 @@ from typing import Any
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from ..types import LLMResponse, ToolCall
+from ...types import LLMResponse, ToolCall
 
 # 加载项目根目录的 .env 文件
-env_path = Path(__file__).resolve().parents[4] / ".env"
+env_path = Path(__file__).resolve().parents[5] / ".env"
 load_dotenv(env_path, override=True)
 
 
