@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from ...types import LLMResponse, ToolCall
 from .config import ProviderConfig
@@ -24,9 +24,9 @@ class GenericOpenAIProvider(LLMProvider):
         self.config = config
         base_url = config.base_url or None
         if base_url:
-            self.client = OpenAI(api_key=config.api_key, base_url=base_url)
+            self.client = AsyncOpenAI(api_key=config.api_key, base_url=base_url)
         else:
-            self.client = OpenAI(api_key=config.api_key)
+            self.client = AsyncOpenAI(api_key=config.api_key)
         self.model = config.model
 
     def switch_model(self, model_name: str) -> str:
@@ -84,41 +84,42 @@ class GenericOpenAIProvider(LLMProvider):
 
         return LLMResponse(content=content, tool_calls=tool_calls, usage=usage, reasoning_content=reasoning_content)
 
-    def chat(
+    async def chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> LLMResponse:
         params = self._build_params(messages, tools, stream=False)
-        response = self.client.chat.completions.create(**params)
+        response = await self.client.chat.completions.create(**params)
         return self._parse_response(response)
 
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[dict[str, Any]],
         **kwargs,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         params = self._build_params(messages, stream=True)
-        response = self.client.chat.completions.create(**params)
-        for chunk in response:
+        response = await self.client.chat.completions.create(**params)
+        async for chunk in response:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-    def chat_stream_with_tools(
+    async def chat_stream_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         params = self._build_params(messages, tools, stream=True)
 
-        response = self.client.chat.completions.create(**params)
+        response = await self.client.chat.completions.create(**params)
 
         tool_calls_accum: dict[int, dict[str, Any]] = {}
+        tool_names_seen: set[int] = set()
         usage_yielded = False
 
-        for chunk in response:
+        async for chunk in response:
             if chunk.usage:
                 usage_yielded = True
                 yield {
@@ -144,9 +145,16 @@ class GenericOpenAIProvider(LLMProvider):
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index
+                    if idx not in tool_names_seen and tc.function and tc.function.name:
+                        tool_names_seen.add(idx)
+                        yield {
+                            "type": "tool_call_start",
+                            "tool_name": tc.function.name,
+                            "index": idx,
+                        }
                     if idx not in tool_calls_accum:
                         tool_calls_accum[idx] = {
-                            "id": tc.id or "",
+                            "id": tc.id or None,
                             "name": tc.function.name if tc.function and tc.function.name else "",
                             "arguments": tc.function.arguments if tc.function and tc.function.arguments else "",
                         }

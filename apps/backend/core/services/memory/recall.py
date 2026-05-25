@@ -29,7 +29,7 @@ class MemoryRecall:
         self.llm = llm
         self.memory_manager = memory_manager
 
-    def recall(self, context: str, limit: int = RECALL_LIMIT) -> list[Memory]:
+    async def recall(self, context: str, limit: int = RECALL_LIMIT) -> list[Memory]:
         """召回相关记忆
 
         Args:
@@ -52,7 +52,7 @@ class MemoryRecall:
         memory_index = self._build_memory_index(all_memories)
 
         # 使用小模型选择
-        selected_indices = self._select_with_llm(context, memory_index, limit)
+        selected_indices = await self._select_with_llm(context, memory_index, limit)
 
         # 返回选中的记忆
         return [all_memories[i] for i in selected_indices if i < len(all_memories)]
@@ -65,7 +65,7 @@ class MemoryRecall:
             lines.append(f"{i}. [{memory.memory_type.value}] {memory.name}: {memory.description}{stale_marker}")
         return "\n".join(lines)
 
-    def _select_with_llm(self, context: str, memory_index: str, limit: int) -> list[int]:
+    async def _select_with_llm(self, context: str, memory_index: str, limit: int) -> list[int]:
         """使用 LLM 选择相关记忆
 
         Args:
@@ -94,7 +94,7 @@ class MemoryRecall:
             fast_provider = create_fast_provider(self.llm)
             llm = fast_provider if fast_provider else self.llm
 
-            response = llm.chat(
+            response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
                 tools=None,
             )
@@ -112,7 +112,7 @@ class MemoryRecall:
 
         return list(range(min(limit, len(memory_index.split('\n')))))
 
-    def recall_with_filter(
+    async def recall_with_filter(
         self,
         context: str,
         memory_type: MemoryType | None = None,
@@ -145,7 +145,7 @@ class MemoryRecall:
         memory_index = self._build_memory_index(all_memories)
 
         # 使用小模型选择
-        selected_indices = self._select_with_llm(context, memory_index, limit)
+        selected_indices = await self._select_with_llm(context, memory_index, limit)
 
         # 返回选中的记忆
         return [all_memories[i] for i in selected_indices if i < len(all_memories)]

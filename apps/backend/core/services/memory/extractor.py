@@ -58,7 +58,7 @@ class MemoryExtractor:
         self.llm = llm
         self.memory_manager = memory_manager
 
-    def extract(self, messages: list[Message]) -> Memory | None:
+    async def extract(self, messages: list[Message]) -> Memory | None:
         """从对话中提取记忆
 
         Args:
@@ -79,7 +79,7 @@ class MemoryExtractor:
         llm = fast_provider if fast_provider else self.llm
 
         try:
-            response = llm.chat(
+            response = await llm.chat(
                 messages=[{"role": "user", "content": f"{EXTRACT_PROMPT}\n\n---\n\n{conversation}"}],
                 tools=None,
             )

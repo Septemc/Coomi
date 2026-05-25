@@ -1,6 +1,7 @@
 """工具基类"""
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -37,15 +38,24 @@ class BaseTool(ABC):
     concurrency: ToolConcurrency
     requires_confirmation: bool
 
+    @property
+    def is_interactive(self) -> bool:
+        """交互式工具需要用户输入，走 async 路径而非线程池"""
+        return False
+
     @abstractmethod
     def get_parameters_schema(self) -> dict[str, Any]:
         """获取参数JSON Schema（OpenAI格式）"""
         pass
 
     @abstractmethod
-    async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        """执行工具"""
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        """执行工具（同步方法，由调用方通过 asyncio.to_thread 在线程池中执行）"""
         pass
+
+    async def run_async(self, arguments: dict[str, Any], app_context: Any = None) -> ToolResult:
+        """交互式工具的 async 执行入口，默认回退到同步 run()"""
+        return await asyncio.to_thread(self.run, arguments)
 
     def to_openai_tool(self) -> dict[str, Any]:
         """转换为OpenAI工具定义格式"""

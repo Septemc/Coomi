@@ -31,7 +31,7 @@ class ToolRegistry:
         return [tool.to_openai_tool() for tool in self._tools.values()]
 
     async def execute(self, tool_call: ToolCall) -> ToolResult:
-        """执行工具调用（异步）"""
+        """执行工具调用（异步，在线程池中运行同步工具）"""
         tool = self.get(tool_call.name)
         if tool is None:
             return ToolResult(
@@ -41,7 +41,7 @@ class ToolRegistry:
             )
 
         try:
-            result = await tool.run(tool_call.arguments)
+            result = await asyncio.to_thread(tool.run, tool_call.arguments)
             return result
         except Exception as e:
             return ToolResult(
@@ -61,13 +61,7 @@ class ToolRegistry:
             )
 
         try:
-            # 如果工具是异步的，在同步环境中运行
-            if asyncio.iscoroutinefunction(tool.run):
-                loop = asyncio.new_event_loop()
-                result = loop.run_until_complete(tool.run(tool_call.arguments))
-                loop.close()
-            else:
-                result = tool.run(tool_call.arguments)
+            result = tool.run(tool_call.arguments)
             return result
         except Exception as e:
             return ToolResult(

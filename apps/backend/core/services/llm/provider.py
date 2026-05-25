@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 
 from ...types import LLMResponse
 
@@ -11,13 +11,13 @@ class LLMProvider(ABC):
     """LLM Provider 抽象基类 - 所有厂商实现必须继承"""
 
     @abstractmethod
-    def chat(
+    async def chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> LLMResponse:
-        """同步调用LLM
+        """异步调用LLM
 
         Args:
             messages: 消息列表
@@ -30,11 +30,11 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[dict[str, Any]],
         **kwargs,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         """流式纯文本输出（不支持工具调用）
 
         Args:
@@ -47,12 +47,12 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def chat_stream_with_tools(
+    async def chat_stream_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """流式输出 + 工具调用
 
         Args:
@@ -67,21 +67,10 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def switch_model(self, model_name: str) -> str:
-        """运行时切换模型
-
-        Args:
-            model_name: 模型名称或别名
-
-        Returns:
-            str: 解析后的模型名称
-        """
+        """运行时切换模型（纯内存操作，无需 async）"""
         pass
 
     @abstractmethod
     def get_model_display_name(self) -> str:
-        """获取人类可读的模型显示名称
-
-        Returns:
-            str: 模型显示名称
-        """
+        """获取人类可读的模型显示名称（纯内存操作，无需 async）"""
         pass

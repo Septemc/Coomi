@@ -1,7 +1,7 @@
 """DeepSeek Provider 实现"""
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 
 from .config import ProviderConfig
 from .generic import GenericOpenAIProvider
@@ -31,14 +31,14 @@ class DeepSeekProvider(GenericOpenAIProvider):
             params.setdefault("tool_choice", tool_choice)
         return params
 
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[dict[str, Any]],
         **kwargs,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         params = self._build_params(messages, stream=True)
         params["reasoning_effort"] = "high"
-        response = self.client.chat.completions.create(**params)
-        for chunk in response:
+        response = await self.client.chat.completions.create(**params)
+        async for chunk in response:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content

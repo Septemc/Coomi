@@ -94,7 +94,7 @@ class ContextCompressor:
         estimated = _estimate_tokens_from_dicts(session.get_messages_for_api())
         return estimated > threshold
 
-    def compress(self, session: Session, context_window_size: int) -> list[Message]:
+    async def compress(self, session: Session, context_window_size: int) -> list[Message]:
         """执行三层压缩
 
         Args:
@@ -125,7 +125,7 @@ class ContextCompressor:
             return messages
 
         # Layer 3: LLM 摘要 - 全量压缩
-        messages = self._llm_summarize(messages, context_window_size)
+        messages = await self._llm_summarize(messages, context_window_size)
         session.messages = messages
         return messages
 
@@ -168,7 +168,7 @@ class ContextCompressor:
         # 保留第一条 + 最近 N 条
         return [messages[0]] + messages[-(KEEP_RECENT_MESSAGES):]
 
-    def _llm_summarize(self, messages: list[Message], context_window_size: int) -> list[Message]:
+    async def _llm_summarize(self, messages: list[Message], context_window_size: int) -> list[Message]:
         """Layer 3: LLM 摘要 - 用当前模型生成 9 段结构化摘要
 
         模仿 Claude Code 的 compactConversation 行为：
@@ -184,7 +184,7 @@ class ContextCompressor:
 
         try:
             # 调用 LLM 生成摘要
-            response = self.llm.chat(
+            response = await self.llm.chat(
                 messages=[
                     {"role": "user", "content": f"{SUMMARIZE_PROMPT}\n\n---\n\n{conversation}"}
                 ],

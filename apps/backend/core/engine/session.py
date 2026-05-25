@@ -73,6 +73,31 @@ dedicated tools allows the user to better understand and review your work:
 - Search for files with the Glob tool, not find or ls
 - Search content with the Grep tool, not grep or rg
 
+## Plan Mode
+When you receive "Plan Mode is ACTIVE" in the environment section:
+- You are in read-only exploration + design mode
+- Use Read, Grep, Glob to explore the codebase — do NOT write or edit files
+- Use AskUserQuestion to clarify requirements before designing
+- Write your plan as a clear, actionable markdown document
+- Call ExitPlanMode when your plan is complete and ready for user approval
+
+## When to Use AskUserQuestion
+Use AskUserQuestion when:
+- You are in Plan Mode and need to clarify ambiguous requirements
+- The user's request has multiple valid interpretations
+- You need the user to choose between design alternatives
+- You are about to start a non-trivial task and need input
+
+Do NOT use AskUserQuestion for:
+- Simple, unambiguous tasks (fix a typo, add a log line)
+- Questions you can answer yourself by reading the codebase
+- Confirmations that would waste the user's time
+
+When using AskUserQuestion, provide:
+- 1-4 questions maximum, each with a short header (≤4 chars)
+- 2-4 options per question with clear labels and descriptions
+- A recommendation for each question when you have a strong preference
+
 ## Git Safety Protocol
 - NEVER modify git config
 - NEVER run destructive git commands (push --force, reset --hard, checkout ., restore .,
@@ -167,12 +192,13 @@ def update_token_usage(session: Session, usage: dict[str, int]) -> None:
     session.last_prompt_tokens = usage.get("prompt_tokens", 0)
 
 
-def build_system_prompt(
+async def build_system_prompt(
     memory_manager: MemoryManager | None = None,
     memory_recall: "MemoryRecall | None" = None,
     current_context: str = "",
     cwd: str | None = None,
     model_display: str = "",
+    plan_mode: bool = False,
 ) -> str:
     """构建含记忆的 System Prompt（静态/动态分割线）
 
@@ -204,13 +230,25 @@ def build_system_prompt(
     ]
     if model_display:
         env_lines.append(f"- Model: {model_display}")
+    if plan_mode:
+        env_lines.append("- **Plan Mode is ACTIVE**")
     dynamic_parts.append("\n".join(env_lines))
+
+    # 1.5 Plan Mode 指令（仅在激活时注入）
+    if plan_mode:
+        dynamic_parts.append(
+            "## Current Mode\n"
+            "- **Plan Mode is ACTIVE** — You are in read-only exploration mode.\n"
+            "- Do NOT write, edit, or create files.\n"
+            "- Use AskUserQuestion to clarify requirements before designing your plan.\n"
+            "- When your plan is ready, call ExitPlanMode to get user approval."
+        )
 
     # 2. 记忆内容（注入完整正文，而非仅索引链接）
     if memory_manager:
         memory_content = ""
         if memory_recall and current_context:
-            selected = memory_recall.recall(current_context)
+            selected = await memory_recall.recall(current_context)
             memory_content = memory_manager.get_selected_memory_content(selected)
         else:
             memory_content = memory_manager.get_all_memory_content(exclude_stale=True)

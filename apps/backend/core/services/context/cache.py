@@ -107,6 +107,8 @@ class ToolResultCache:
         Returns:
             bool: 是否成功缓存
         """
+        if not result:
+            return False
         # 检查是否需要缓存
         if not force and len(result.encode()) < LARGE_RESULT_THRESHOLD:
             return False

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+from typing import Any, AsyncIterator
 
 import anthropic
 
@@ -21,7 +21,7 @@ class AnthropicProvider(LLMProvider):
         kwargs = {"api_key": config.api_key}
         if config.base_url:
             kwargs["base_url"] = config.base_url
-        self.client = anthropic.Anthropic(**kwargs)
+        self.client = anthropic.AsyncAnthropic(**kwargs)
         self.model = config.model
 
     def switch_model(self, model_name: str) -> str:
@@ -41,12 +41,15 @@ class AnthropicProvider(LLMProvider):
             if msg["role"] == "system":
                 system = msg.get("content", "")
             elif msg["role"] == "tool":
+                tool_use_id = msg.get("tool_call_id", "")
+                if not tool_use_id:
+                    continue  # 跳过无 ID 的 tool result，避免 API 400
                 converted.append({
                     "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": msg.get("tool_call_id", ""),
+                            "tool_use_id": tool_use_id,
                             "content": msg.get("content", ""),
                         }
                     ],
@@ -86,7 +89,7 @@ class AnthropicProvider(LLMProvider):
             })
         return converted
 
-    def chat(
+    async def chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
@@ -105,7 +108,7 @@ class AnthropicProvider(LLMProvider):
         if converted_tools:
             params["tools"] = converted_tools
 
-        response = self.client.messages.create(**params)
+        response = await self.client.messages.create(**params)
 
         content = ""
         tool_calls = None
@@ -131,11 +134,11 @@ class AnthropicProvider(LLMProvider):
 
         return LLMResponse(content=content or None, tool_calls=tool_calls, usage=usage)
 
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[dict[str, Any]],
         **kwargs,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         system, converted_messages = self._convert_messages(messages)
 
         params: dict[str, Any] = {
@@ -146,16 +149,16 @@ class AnthropicProvider(LLMProvider):
         if system:
             params["system"] = system
 
-        with self.client.messages.stream(**params) as stream:
-            for text in stream.text_stream:
+        async with self.client.messages.stream(**params) as stream:
+            async for text in stream.text_stream:
                 yield text
 
-    def chat_stream_with_tools(
+    async def chat_stream_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         system, converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools)
 
@@ -171,14 +174,19 @@ class AnthropicProvider(LLMProvider):
 
         tool_input_accum: dict[int, dict[str, Any]] = {}
 
-        with self.client.messages.stream(**params) as stream:
-            for event in stream:
+        async with self.client.messages.stream(**params) as stream:
+            async for event in stream:
                 if event.type == "content_block_start":
                     if event.content_block.type == "tool_use":
                         tool_input_accum[event.index] = {
                             "id": event.content_block.id,
                             "name": event.content_block.name,
                             "json_fragments": [],
+                        }
+                        yield {
+                            "type": "tool_call_start",
+                            "tool_name": event.content_block.name,
+                            "index": event.index,
                         }
                 elif event.type == "content_block_delta":
                     if event.delta.type == "text_delta":
@@ -190,7 +198,7 @@ class AnthropicProvider(LLMProvider):
                                 event.delta.partial_json
                             )
 
-            final_msg = stream.get_final_message()
+            final_msg = await stream.get_final_message()
 
         if final_msg.usage:
             yield {
