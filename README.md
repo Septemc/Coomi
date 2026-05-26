@@ -9,7 +9,7 @@
 - **多厂商 LLM 支持** — DeepSeek、OpenAI、Anthropic，以及任何兼容 OpenAI API 的服务（通过配置驱动的通用 Provider）。运行时通过 `/model` 切换模型。
 - **三层上下文压缩** — Microcompact（清理旧工具结果）→ 消息裁剪 → LLM 摘要（9 段结构化摘要）。超过上下文窗口 90% 时触发。
 - **三层记忆系统** — 项目本地、项目全局、全局记忆，支持自动提取和语义召回。通过 `/memory` 命令管理。
-- **流式 UI** — 基于 Rich Live 的瀑布流输出，支持工具调用通知、缓存命中提示、压缩状态显示，以及显示 Token 用量的持久化状态栏。
+- **流式 UI** — 基于 Textual 的 TUI 界面，支持工具调用通知、缓存命中提示、压缩状态显示，以及显示 Token 用量的持久化状态栏。
 - **工具结果缓存** — 大结果缓存到磁盘（7 天有效期），相同工具调用即时返回。
 
 ## 快速开始
@@ -17,25 +17,38 @@
 ### 环境要求
 
 - Python >= 3.10
-- pip
 
 ### 安装
+
+#### 从 PyPI 安装（推荐）
+
+```bash
+pip install coomi-agent
+```
+
+#### 从源码安装
 
 ```bash
 git clone https://github.com/Septemc/Coomi.git
 cd Coomi
-pip install -r requirements.txt
+pip install -e .
 ```
 
-### 配置
-
-复制 `.env.example` 为 `.env` 并填写 API 密钥：
+### 首次运行
 
 ```bash
-cp .env.example .env
+coomi
 ```
 
-首次运行时，Coomi 会自动将 `.env` 中的配置迁移到 `~/.coomi/config/providers.json`。此后所有模型配置都在 `providers.json` 中管理：
+首次运行时，Coomi 会自动引导你配置 LLM Provider。配置优先级：
+
+1. **环境变量** — 自动检测 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`
+2. **.env 文件** — 项目根目录的 `.env` 文件
+3. **交互式配置** — 终端交互引导
+
+### 配置文件
+
+所有模型配置存储在 `~/.coomi/config/providers.json`：
 
 ```json
 {
@@ -56,10 +69,14 @@ cp .env.example .env
 
 支持的 Provider 类型：`deepseek`、`openai`、`anthropic`、`generic`（任意兼容 OpenAI API 的服务）。
 
-### 运行
+### 运行方式
 
 ```bash
-python run.py
+# CLI 命令（推荐）
+coomi
+
+# 模块运行
+python -m coomi
 ```
 
 ## 内置命令
@@ -80,44 +97,46 @@ python run.py
 ## 架构
 
 ```
-run.py                          # 主入口（CLI 交互循环 + 流式 UI）
-apps/backend/
-├── cli/main.py                 # Typer CLI（辅助入口）
-├── core/
-│   ├── types.py                # Message, Session, ToolCall, LLMResponse
-│   ├── engine/
-│   │   ├── loop.py             # AgentLoop — 感知-决策-执行循环
-│   │   └── session.py          # SessionManager，System Prompt 构建器
-│   ├── services/
-│   │   ├── llm/                # Provider 层（抽象基类 + 4 种实现）
-│   │   │   ├── provider.py     # LLMProvider 抽象基类
-│   │   │   ├── generic.py      # GenericOpenAIProvider（配置驱动）
-│   │   │   ├── deepseek.py     # DeepSeekProvider（thinking mode）
-│   │   │   ├── openai.py       # OpenAIProvider
-│   │   │   ├── anthropic.py    # AnthropicProvider
-│   │   │   ├── factory.py      # Provider 工厂 + Flash 模型降级
-│   │   │   └── config.py       # ConfigManager（~/.coomi/config/providers.json）
-│   │   ├── context/
-│   │   │   ├── compressor.py   # 三层压缩
-│   │   │   └── cache.py        # 工具结果磁盘缓存
-│   │   └── memory/
-│   │       ├── manager.py      # 三层记忆存储
-│   │       ├── extractor.py    # 对话自动提取
-│   │       └── recall.py       # 语义记忆召回
-│   ├── tools/                  # 15+ 内置工具
-│   │   ├── file_ops/           # Read, Write, Edit
-│   │   ├── search/             # Glob, Grep
-│   │   ├── shell/              # Bash, PowerShell
-│   │   ├── web/                # WebFetch, WebSearch
-│   │   ├── task/               # TodoWrite
-│   │   ├── agent/              # 子 Agent 委托
-│   │   ├── user/               # AskUserQuestion
-│   │   └── workspace/          # Plan 模式（进入/退出）
-│   └── ui/
-│       ├── stream_renderer.py  # Rich Live Markdown 流式渲染
-│       ├── status_line.py      # 状态栏（模型 + Token 用量）
-│       └── tool_formatter.py   # 工具调用详情格式化
-└── frontend/                   # Vue 3 + Vite + TypeScript（开发中）
+coomi/                          # 主包
+├── __init__.py                 # 版本信息
+├── __main__.py                 # python -m coomi 入口
+├── cli.py                      # CLI 入口（coomi 命令）
+├── setup.py                    # 首次配置引导
+├── types.py                    # Message, Session, ToolCall, LLMResponse
+├── engine/
+│   ├── loop.py                 # AgentLoop — 感知-决策-执行循环
+│   └── session.py              # SessionManager，System Prompt 构建器
+├── services/
+│   ├── llm/                    # Provider 层（抽象基类 + 4 种实现）
+│   │   ├── provider.py         # LLMProvider 抽象基类
+│   │   ├── generic.py          # GenericOpenAIProvider（配置驱动）
+│   │   ├── deepseek.py         # DeepSeekProvider（thinking mode）
+│   │   ├── openai.py           # OpenAIProvider
+│   │   ├── anthropic.py        # AnthropicProvider（可选依赖）
+│   │   ├── factory.py          # Provider 工厂 + Flash 模型降级
+│   │   └── config.py           # ConfigManager（~/.coomi/config/providers.json）
+│   ├── context/
+│   │   ├── compressor.py       # 三层压缩
+│   │   └── cache.py            # 工具结果磁盘缓存
+│   └── memory/
+│       ├── manager.py          # 三层记忆存储
+│       ├── extractor.py        # 对话自动提取
+│       └── recall.py           # 语义记忆召回
+├── tools/                      # 15+ 内置工具
+│   ├── file_ops/               # Read, Write, Edit
+│   ├── search/                 # Glob, Grep
+│   ├── shell/                  # Bash, PowerShell
+│   ├── web/                    # WebFetch, WebSearch
+│   ├── task/                   # TodoWrite
+│   ├── agent/                  # 子 Agent 委托
+│   ├── user/                   # AskUserQuestion
+│   └── workspace/              # Plan 模式（进入/退出）
+└── ui/                         # Textual TUI 界面
+    ├── textual_app.py          # 主应用
+    ├── status_line.py          # 状态栏（模型 + Token 用量）
+    ├── tool_formatter.py       # 工具调用详情格式化
+    ├── screens/                # 屏幕
+    └── widgets/                # 组件
 ```
 
 ## 上下文压缩

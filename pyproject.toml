@@ -5,18 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "coomi-agent"
 version = "0.1.0"
-description = "类似 Claude Code 的 Agent 工具"
-requires-python = ">=3.10"
+description = "受 Claude Code 启发的 AI 编程助手 — 基于 TUI 的自主 Agent"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["ai", "agent", "cli", "tui", "coding-assistant"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
 dependencies = [
     "openai>=1.6.0",
-    "anthropic>=0.104.0",
-    "pydantic>=2.5.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
     "textual>=1.0.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
+anthropic = ["anthropic>=0.104.0"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -25,14 +39,26 @@ dev = [
 ]
 
 [project.scripts]
-coomi-agent = "run:main"
+coomi = "coomi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Septemc/Coomi"
+Repository = "https://github.com/Septemc/Coomi"
+Issues = "https://github.com/Septemc/Coomi/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["coomi*"]
+
+[tool.setuptools.package-data]
+coomi = ["ui/tcss/*.tcss"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py39"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.9"
 strict = true
 
 [tool.pytest.ini_options]

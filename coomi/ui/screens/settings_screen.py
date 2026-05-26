@@ -1,0 +1,77 @@
+"""SettingsScreen — 设置面板模态屏
+
+⚙ 齿轮图标点击后显示，选项列表导航。
+"""
+from __future__ import annotations
+
+from rich.table import Table
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Container
+from textual.screen import ModalScreen
+from textual.widgets import Static
+
+SETTINGS_OPTIONS = [
+    ("provider_config", "新增/修改模型API配置", "管理 LLM Provider"),
+    ("install_skill", "安装 SKILL", "Coming soon"),
+    ("install_mcp", "安装 MCP", "Coming soon"),
+]
+
+
+class SettingsScreen(ModalScreen[str | None]):
+    """设置面板"""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "move_up", "Up", priority=True),
+        Binding("down", "move_down", "Down", priority=True),
+        Binding("enter", "confirm", "Confirm", priority=True),
+    ]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._selected: int = 0
+
+    def compose(self) -> ComposeResult:
+        with Container(id="settings-container"):
+            yield Static("  ⚙ Settings", id="settings-title")
+            yield Static(self._render_options(), id="settings-options")
+
+    def _render_options(self) -> str:
+        lines = []
+        for i, (key, label, desc) in enumerate(SETTINGS_OPTIONS):
+            if i == self._selected:
+                lines.append(f"[bold reverse] ● {label} [/bold reverse]  [dim]{desc}[/dim]")
+            else:
+                lines.append(f"  [cyan]○[/cyan] {label}  [dim]{desc}[/dim]")
+        lines.append("")
+        lines.append("[dim]↑↓ 导航  Enter 选择  Esc 返回[/dim]")
+        return "\n".join(lines)
+
+    def _refresh_display(self) -> None:
+        try:
+            options = self.query_one("#settings-options", Static)
+            options.update(self._render_options())
+        except Exception:
+            pass
+
+    def action_move_up(self) -> None:
+        self._selected = (self._selected - 1) % len(SETTINGS_OPTIONS)
+        self._refresh_display()
+
+    def action_move_down(self) -> None:
+        self._selected = (self._selected + 1) % len(SETTINGS_OPTIONS)
+        self._refresh_display()
+
+    def action_confirm(self) -> None:
+        key = SETTINGS_OPTIONS[self._selected][0]
+        if key == "provider_config":
+            self.dismiss("provider_config")
+        elif key == "install_skill":
+            self.dismiss("install_skill")
+        elif key == "install_mcp":
+            self.dismiss("install_mcp")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
