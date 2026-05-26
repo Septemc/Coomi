@@ -72,3 +72,4 @@ scripts/
 
 # Coomi agent data
 .coomi/
+*.zip
