@@ -16,7 +16,7 @@
 
 ### 环境要求
 
-- Python >= 3.10
+- Python >= 3.9
 
 ### 安装
 
@@ -32,6 +32,37 @@ pip install coomi-agent
 git clone https://github.com/Septemc/Coomi.git
 cd Coomi
 pip install -e .
+```
+
+### Python 环境说明
+
+> **注意**：如果你的系统有多个 Python 环境（如 Miniconda、系统 Python），`pip install -e .` 会安装到当前 shell 激活的 Python 环境中。
+
+| 环境类型 | 安装位置 |
+|----------|----------|
+| 系统 Python (Windows) | `C:\Users\{用户}\AppData\Local\Programs\Python\Python3X\` |
+| Miniconda/Anaconda | `{Miniconda路径}\envs\{环境名}\` 或 `{Miniconda路径}\` |
+| 虚拟环境 (.venv) | `项目目录\.venv\` |
+
+**验证当前环境**：
+```bash
+# 查看 Python 路径
+which python
+# 或 Windows:
+where python
+
+# 查看 pip 目标路径
+python -m pip show coomi-agent | grep Location
+```
+
+**当前安装情况**（本机）：
+- Shell Python: `F:\Miniconda3\python.exe`
+- 安装位置: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Lib\site-packages`
+- 可执行文件: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Scripts\coomi.exe`
+
+如需在 Miniconda 环境中使用，执行：
+```bash
+F:\Miniconda3\python.exe -m pip install -e .
 ```
 
 ### 首次运行
