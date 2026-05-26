@@ -73,3 +73,6 @@ scripts/
 # Coomi agent data
 .coomi/
 *.zip
+
+# Temporary output files
+ssh_out.txt
