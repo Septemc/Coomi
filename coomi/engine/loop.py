@@ -133,6 +133,25 @@ class AgentLoop:
                     await asyncio.sleep(2 ** attempt)
         raise last_error  # type: ignore[misc]
 
+    async def _chat_stream_with_retry(self, messages, tools=None):
+        """带重试的流式 LLM 调用（仅在未发送内容时重试）"""
+        last_error = None
+        has_yielded = False
+        for attempt in range(MAX_RETRIES):
+            try:
+                async for chunk in self.llm.chat_stream_with_tools(messages, tools=tools):
+                    has_yielded = True
+                    yield chunk
+                return  # 成功完成
+            except Exception as e:
+                last_error = e
+                if has_yielded:
+                    # 已发送部分内容，不再重试，直接抛出异常
+                    raise last_error
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(2 ** attempt)
+        raise last_error  # type: ignore[misc]
+
     async def run_stream(self, session: Session, user_input: str) -> AsyncIterator[AgentEvent]:
         """执行Agent主循环（异步流式输出）
 
@@ -161,7 +180,7 @@ class AgentLoop:
             full_reasoning = ""
             tool_calls_data = []
 
-            async for chunk in self.llm.chat_stream_with_tools(messages, tools=tools):
+            async for chunk in self._chat_stream_with_retry(messages, tools=tools):
                 # 流式过程中也检查取消
                 if self._cancel_token.is_cancelled:
                     yield AgentCancelled()

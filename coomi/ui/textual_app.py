@@ -1193,7 +1193,21 @@ class CoomiApp(App):
                     break
 
         except Exception as e:
-            self._wl(log, f"\n[red]Agent error: {e}[/red]")
+            error_type = type(e).__name__
+            if "Connection" in error_type or "Connect" in error_type:
+                self._wl(log, f"\n[red]连接错误: {e}[/red]")
+                self._wl(log, "[yellow]请检查：[/yellow]")
+                self._wl(log, "  1. 网络连接是否正常")
+                self._wl(log, "  2. API 端点 URL 是否正确")
+                self._wl(log, "  3. 防火墙/代理是否拦截")
+            elif "Timeout" in error_type:
+                self._wl(log, f"\n[red]请求超时: {e}[/red]")
+                self._wl(log, "[yellow]请检查网络稳定性或增加超时配置[/yellow]")
+            elif "Authentication" in error_type or "401" in str(e):
+                self._wl(log, f"\n[red]认证失败: {e}[/red]")
+                self._wl(log, "[yellow]请检查 API Key 是否有效[/yellow]")
+            else:
+                self._wl(log, f"\n[red]Agent error: {e}[/red]")
         finally:
             self._stop_spinner()
             self._agent_running = False

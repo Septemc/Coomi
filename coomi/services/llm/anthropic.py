@@ -5,6 +5,7 @@ import json
 from typing import Any, AsyncIterator
 
 import anthropic
+import httpx
 
 from ...types import LLMResponse, ToolCall
 from .config import ProviderConfig
@@ -18,7 +19,8 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig):
         self.config = config
-        kwargs = {"api_key": config.api_key}
+        timeout = httpx.Timeout(300.0, connect=30.0)  # 300s 总超时，30s 连接超时
+        kwargs = {"api_key": config.api_key, "timeout": timeout}
         if config.base_url:
             kwargs["base_url"] = config.base_url
         self.client = anthropic.AsyncAnthropic(**kwargs)

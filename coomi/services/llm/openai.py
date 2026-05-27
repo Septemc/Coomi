@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
+import httpx
 from openai import AsyncOpenAI
 
 from ...types import LLMResponse, ToolCall
@@ -16,7 +17,8 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig):
         self.config = config
-        self.client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None)
+        timeout = httpx.Timeout(300.0, connect=30.0)  # 300s 总超时，30s 连接超时
+        self.client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None, timeout=timeout)
         self.model = config.model
 
     def switch_model(self, model_name: str) -> str:
