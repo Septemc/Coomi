@@ -9,10 +9,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Static
+from textual.widgets import Input, Select, Static
 from textual import on
 
-from ...services.llm.config import ConfigManager, ProviderConfig
+from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS
 
 FIELD_DEFS = [
     ("id", "Provider ID", "唯一标识，如 my-deepseek"),
@@ -22,6 +22,12 @@ FIELD_DEFS = [
     ("base_url", "Base URL", "https://api.deepseek.com"),
     ("model", "模型名", "如 deepseek-v4-pro"),
     ("fast_model", "快速模型 (可选)", "如 deepseek-v4-flash"),
+]
+
+# 预设选项列表
+PRESET_OPTIONS = [
+    (preset_id, f"{data['display']} ({preset_id})")
+    for preset_id, data in PRESET_PROVIDERS.items()
 ]
 
 
@@ -65,6 +71,17 @@ class ProviderEditScreen(ModalScreen[bool]):
         title = "⚙ Edit Provider" if self._editing else "⚙ New Provider"
         with Container(id="provider-edit-container"):
             yield Static(f"  {title}", id="provider-edit-title")
+
+            # 新建时显示预设选择
+            if not self._editing:
+                yield Static("  [dim]从预设创建（可选）:[/dim]")
+                yield Select(
+                    options=[("", "--- 选择预设 ---")] + PRESET_OPTIONS,
+                    id="preset-select",
+                    allow_blank=True,
+                )
+                yield Static("")
+
             with Vertical(id="provider-edit-form"):
                 for key, label, hint in FIELD_DEFS:
                     value = self._init_values.get(key, "")
@@ -81,6 +98,32 @@ class ProviderEditScreen(ModalScreen[bool]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """阻止 Input 的 Submitted 事件传播，避免触发 Screen 的 Enter 绑定"""
         event.stop()
+
+    @on(Select.Changed)
+    def on_preset_selected(self, event: Select.Changed) -> None:
+        """预设选择变更时自动填充字段"""
+        if event.value == "":
+            return
+        preset_id = event.value
+        if preset_id not in PRESET_PROVIDERS:
+            return
+
+        preset = PRESET_PROVIDERS[preset_id]
+        # 自动填充字段
+        fields_to_fill = {
+            "id": preset_id,
+            "type": preset.get("type", "generic"),
+            "display": preset.get("display", ""),
+            "base_url": preset.get("base_url", ""),
+            "model": preset.get("model", ""),
+            "fast_model": preset.get("fast_model", ""),
+        }
+        for key, value in fields_to_fill.items():
+            try:
+                inp = self.query_one(f"#field-{key}", Input)
+                inp.value = value
+            except Exception:
+                pass
 
     def action_save(self) -> None:
         """保存 Provider 配置"""

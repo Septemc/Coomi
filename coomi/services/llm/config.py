@@ -6,6 +6,38 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# 预设 Provider 配置 — 用户可通过 UI 快速创建
+PRESET_PROVIDERS: dict[str, dict] = {
+    "mimo-openai": {
+        "type": "generic",
+        "display": "MIMO V2.5 Pro (OpenAI)",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+        "model": "MiMo-V2.5-Pro",
+        "fast_model": "MiMo-V2.5",
+    },
+    "mimo-anthropic": {
+        "type": "anthropic",
+        "display": "MIMO V2.5 Pro (Anthropic)",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "model": "MiMo-V2.5-Pro",
+        "fast_model": "MiMo-V2.5",
+    },
+    "minimax-openai": {
+        "type": "generic",
+        "display": "MiniMax M2.7 (OpenAI)",
+        "base_url": "https://api.minimaxi.com/v1",
+        "model": "MiniMax-M2.7",
+        "fast_model": "MiniMax-M2.7",
+    },
+    "minimax-anthropic": {
+        "type": "anthropic",
+        "display": "MiniMax M2.7 (Anthropic)",
+        "base_url": "https://api.minimaxi.com/anthropic",
+        "model": "MiniMax-M2.7",
+        "fast_model": "MiniMax-M2.7",
+    },
+}
+
 
 @dataclass
 class ProviderConfig:
