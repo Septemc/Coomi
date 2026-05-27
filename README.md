@@ -65,6 +65,24 @@ python -m pip show coomi-agent | grep Location
 F:\Miniconda3\python.exe -m pip install -e .
 ```
 
+### 更新
+
+#### 从 PyPI 更新（推荐）
+
+```bash
+pip install --upgrade coomi-agent
+```
+
+#### 从源码更新
+
+```bash
+cd Coomi
+git pull origin main
+pip install -e .
+```
+
+**注意**：从源码安装（`pip install -e .`）时，代码会指向你的本地目录，每次 `git pull` 后无需重新安装。只有当 `pyproject.toml` 中的依赖发生变化时才需要重新执行 `pip install -e .`。
+
 ### 首次运行
 
 ```bash
