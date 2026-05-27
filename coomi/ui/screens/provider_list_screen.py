@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from typing import Optional
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
@@ -13,7 +14,7 @@ from textual.widgets import Static
 from ...services.llm.config import ConfigManager, ProviderConfig
 
 
-class ProviderListScreen(ModalScreen[dict | None]):
+class ProviderListScreen(ModalScreen[Optional[dict]]):
     """Provider 列表屏
 
     返回: {"action": "edit", "provider": ProviderConfig} 或 {"action": "add"} 或 None

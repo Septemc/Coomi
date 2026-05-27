@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from typing import Optional
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
@@ -19,7 +20,7 @@ SETTINGS_OPTIONS = [
 ]
 
 
-class SettingsScreen(ModalScreen[str | None]):
+class SettingsScreen(ModalScreen[Optional[str]]):
     """设置面板"""
 
     BINDINGS = [
