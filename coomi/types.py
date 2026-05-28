@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
 
@@ -87,3 +89,61 @@ class Session:
         result = [{"role": "system", "content": self.system_prompt}]
         result.extend(msg.to_dict() for msg in self.messages)
         return result
+
+
+# ============================================================
+# Loop 模式类型
+# ============================================================
+
+class LoopStatus(str, Enum):
+    """Loop 执行状态"""
+    RUNNING = "running"
+    PAUSED_ISSUE = "paused_issue"       # 遇到需要人工处理的问题
+    PAUSED_NETWORK = "paused_network"   # 网络断开等待重连
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class Spec:
+    """解析后的任务规格"""
+    title: str
+    goal: str
+    steps: list[str]
+    constraints: list[str]
+    acceptance_criteria: list[str]
+    resources: dict[str, str]           # 可用资源描述
+    tools_allowed: list[str]            # 允许使用的工具
+    tools_forbidden: list[str]          # 禁止使用的工具
+
+
+@dataclass
+class Checkpoint:
+    """步骤检查点"""
+    step_index: int
+    step_summary: str                   # LLM 生成的步骤完成摘要
+    files_changed: list[str]            # 已修改的文件路径列表
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class LoopSession:
+    """Loop 模式会话"""
+    loop_id: str
+    spec: Spec
+    status: LoopStatus = LoopStatus.RUNNING
+    current_step: int = 0                # 当前执行到第几步（0-based）
+    checkpoints: list[Checkpoint] = field(default_factory=list)
+    retry_counts: dict[int, int] = field(default_factory=dict)  # step_index -> retry count
+    started_at: datetime = field(default_factory=datetime.now)
+    last_active_at: datetime = field(default_factory=datetime.now)
+    loop_dir: Path | None = None         # .coomi/loops/{loop_id}/ 目录
+
+
+class StepResult(str, Enum):
+    """步骤执行结果"""
+    SUCCESS = "success"
+    RETRY = "retry"                      # 需要重试
+    SKIP = "skip"                        # 跳过（写入 ISSUE.md 后）
+    FAILED = "failed"                    # 最终失败

@@ -34,6 +34,10 @@ from ..ui.events import (
     AgentCancelled,
     AgentError,
     CompressionEvent,
+    LoopProgress,
+    LoopStepStart,
+    LoopStepDone,
+    LoopIssueCreated,
     ReasoningChunk,
     TextChunk,
     ToolCacheHit,
@@ -263,6 +267,11 @@ class CoomiApp(App):
         self._plan_panel = None
         self._question_future: asyncio.Future | None = None
 
+        # Loop mode
+        self._loop_mode: bool = False
+        self._loop_runner = None
+        self._loop_session: Any = None  # LoopSession
+
         # Slash command inline autocomplete
         self._command_list = None
         self._command_mode: bool = False
@@ -398,6 +407,10 @@ class CoomiApp(App):
             asyncio.create_task(self._handle_plan_command())
         elif cmd == "/exit_plan":
             asyncio.create_task(self._handle_exit_plan_command())
+        elif cmd == "/loop":
+            asyncio.create_task(self._handle_loop_command(""))
+        elif cmd.startswith("/loop "):
+            asyncio.create_task(self._handle_loop_command(cmd[5:].strip()))
         elif cmd == "/compact":
             self._handle_compact_command()
         elif cmd == "/clear":
@@ -443,6 +456,158 @@ class CoomiApp(App):
         self._show_command_result("[dim]Plan Mode deactivated[/dim]")
         await self._rebuild_system_prompt()
 
+    async def _handle_loop_command(self, args: str) -> None:
+        """处理 /loop 命令"""
+        from ..engine.loop_runner import LoopRunner
+        from ..engine.spec_parser import parse_spec_file
+
+        if args in ("status", "pause", "resume", "stop"):
+            if args == "status":
+                if self._loop_session:
+                    ls = self._loop_session
+                    self._show_command_result(
+                        f"[bold cyan]Loop Status:[/bold cyan] {ls.status.value}\n"
+                        f"  Task: {ls.spec.title}\n"
+                        f"  Progress: Step {ls.current_step + 1}/{len(ls.spec.steps)}\n"
+                        f"  ID: {ls.loop_id}"
+                    )
+                else:
+                    self._show_command_result("[dim]No active loop[/dim]")
+            elif args == "pause":
+                if self._loop_runner:
+                    self._loop_runner.cancel_token.cancel()
+                    self._show_command_result("[yellow]Loop paused[/yellow]")
+                else:
+                    self._show_command_result("[dim]No active loop[/dim]")
+            elif args == "resume":
+                self._show_command_result("[dim]Loop resume not yet implemented[/dim]")
+            elif args == "stop":
+                if self._loop_runner:
+                    self._loop_runner.cancel_token.cancel()
+                    self._loop_mode = False
+                    self._loop_session = None
+                    self._loop_runner = None
+                    self._show_command_result("[red]Loop stopped[/red]")
+            return
+
+        # 启动 loop
+        spec_path = args if args else None
+        spec = None
+
+        if spec_path:
+            try:
+                spec = parse_spec_file(spec_path)
+            except FileNotFoundError:
+                self._show_command_result(f"[red]Spec file not found: {spec_path}[/red]")
+                return
+            except Exception as e:
+                self._show_command_result(f"[red]Failed to parse spec: {e}[/red]")
+                return
+        else:
+            # 无 spec — 进入 plan 模式创建
+            self._show_command_result(
+                "[bold yellow]⚡ Loop Mode — No spec provided[/bold yellow]\n"
+                "[dim]Describe your task, and I'll help you create a spec first.[/dim]\n"
+                "[dim]Or provide a spec path: /loop path/to/spec.md[/dim]"
+            )
+            await self._handle_plan_command()
+            return
+
+        await self._start_loop(spec)
+
+    async def _start_loop(self, spec) -> None:
+        """启动 loop 执行"""
+        from ..engine.loop_runner import LoopRunner
+
+        self._loop_runner = LoopRunner(
+            llm=self._agent.llm,
+            tool_registry=self._tool_registry,
+            context_window_size=self._agent.context_window_size,
+            app_context=self,
+        )
+        self._loop_mode = True
+
+        self._show_command_result(
+            f"[bold green]🔁 Loop Mode Started[/bold green]\n"
+            f"  Task: {spec.title}\n"
+            f"  Steps: {len(spec.steps)}\n"
+            f"[dim]Use /loop status | /loop pause | /loop stop[/dim]"
+        )
+
+        # Run loop in background
+        asyncio.create_task(self._run_loop(spec))
+
+    async def _run_loop(self, spec) -> None:
+        """后台执行 loop"""
+        log = self.screen.query_one("#message-log", RichLog)
+        status = self.screen.query_one("#status-panel", StatusPanel)
+        preview = self.screen.query_one("#stream-preview", StreamingPreview)
+
+        self._agent_running = True
+
+        def on_state_change(ls):
+            self._loop_session = ls
+
+        try:
+            async for event in self._loop_runner.start_loop(
+                cwd=self._cwd,
+                spec=spec,
+                memory_manager=self._memory_manager,
+                memory_recall=self._memory_recall,
+                display_name=self._display_name,
+                on_state_change=on_state_change,
+            ):
+                if isinstance(event, LoopStepStart):
+                    self._wl(log, (
+                        f"\n[bold yellow]━━━ Step {event.step_index + 1}/{event.total_steps} "
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]\n"
+                        f"[bold]{event.step_description}[/bold]"
+                    ))
+
+                elif isinstance(event, LoopStepDone):
+                    if event.success:
+                        self._wl(log, f"[green]✅ Step {event.step_index + 1} complete[/green]")
+                    else:
+                        self._wl(log, f"[yellow]⚠️ Step {event.step_index + 1} skipped[/yellow]")
+
+                elif isinstance(event, LoopIssueCreated):
+                    self._wl(log, (
+                        f"[red]⚠️ ISSUE created for Step {event.step_index + 1}[/red] "
+                        f"[dim]See .coomi/loops/{self._loop_session.loop_id}/ISSUE.md[/dim]"
+                    ))
+
+                elif isinstance(event, LoopProgress):
+                    try:
+                        status.set_loop_progress(event.current_step, event.total_steps)
+                    except Exception:
+                        pass
+
+                elif isinstance(event, TextChunk):
+                    self._stream_buffer += event.content
+                    preview.show_text(self._stream_buffer)
+
+                elif isinstance(event, UsageUpdate):
+                    self.status_line.update_usage(event.usage)
+                    status.refresh()
+
+                elif isinstance(event, AgentError):
+                    self._wl(log, f"\n[red]Loop error: {event.message}[/red]")
+
+                elif isinstance(event, AgentCancelled):
+                    self._wl(log, "\n[dim]Loop cancelled[/dim]")
+                    break
+
+        except Exception as e:
+            self._wl(log, f"\n[red]Loop crashed: {e}[/red]")
+        finally:
+            self._agent_running = False
+            self._loop_mode = False
+            self._loop_runner = None
+            status.set_idle()
+            preview.clear_preview()
+            if self._loop_session and self._loop_session.status.value == "completed":
+                self._wl(log, f"\n[bold green]🎉 Loop Complete: {spec.title}[/bold green]")
+
     async def _rebuild_system_prompt(self) -> None:
         """立即重建 system prompt，使当前 agent 轮次看到最新指令"""
         if not self._session:
@@ -465,6 +630,7 @@ class CoomiApp(App):
             "[bold cyan]Coomi Agent Commands[/bold cyan]\n\n"
             "  [bold]/plan[/bold]          进入 Plan Mode\n"
             "  [bold]/exit_plan[/bold]     退出 Plan Mode\n"
+            "  [bold]/loop[/bold]          长线任务执行模式\n"
             "  [bold]/model[/bold]         切换 LLM 模型\n"
             "  [bold]/context[/bold]       设置上下文窗口大小\n"
             "  [bold]/memory[/bold]        记忆管理\n"
@@ -871,6 +1037,9 @@ class CoomiApp(App):
         elif stripped == "/exit_plan":
             await self._handle_exit_plan_command()
             return
+        elif stripped == "/loop" or stripped.startswith("/loop "):
+            await self._handle_loop_command(stripped[5:].strip())
+            return
         elif stripped == "/compact":
             self._handle_compact_command()
             return
@@ -946,6 +1115,10 @@ class CoomiApp(App):
         elif stripped == "/exit_plan":
             import asyncio
             asyncio.create_task(self._handle_exit_plan_command())
+            return
+        elif stripped == "/loop" or stripped.startswith("/loop "):
+            import asyncio
+            asyncio.create_task(self._handle_loop_command(stripped[5:].strip()))
             return
         elif stripped == "/compact":
             self._handle_compact_command()
@@ -1160,8 +1333,14 @@ class CoomiApp(App):
                         self._wl(log, "\n[dim]Cancelled.[/dim]")
                         break
                     elif isinstance(event, AgentError):
-                        self._wl(log, f"\n[red]Error: {event.message}[/red]")
-                        break
+                        if event.is_fatal:
+                            # 致命错误 — 步骤确实失败，但用户仍可继续对话
+                            self._wl(log, f"\n[red]❌ Agent 错误:[/red] {event.message}")
+                        else:
+                            # 非致命警告 — LLM 降级/迭代上限等，可继续
+                            self._wl(log, f"\n[yellow]⚠️ Agent 警告:[/yellow] {event.message}")
+                        self._wl(log, "[dim]你可以继续输入来恢复工作。[/dim]")
+                        break  # 退出当前 run，但 finally 块会正常恢复 UI
 
                 # --- 流结束：推理内容若未渲染（无 TextChunk 跟随），在此兜底 ---
                 if self._full_reasoning and self._reasoning_visible:

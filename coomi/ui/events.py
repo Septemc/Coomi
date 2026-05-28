@@ -64,10 +64,51 @@ class CompressionEvent(AgentEvent):
 
 @dataclass
 class AgentError(AgentEvent):
-    """Agent 执行错误"""
+    """Agent 执行错误
+    
+    is_fatal: True 表示致命错误（步骤确实失败），False 表示警告（可继续）
+    - LLM API 降级错误: is_fatal=False
+    - 迭代上限: is_fatal=False（会话可继续）
+    - Loop 步骤失败: is_fatal=True（步骤确实执行失败）
+    """
     message: str = ""
+    is_fatal: bool = False
 
 
 @dataclass
 class AgentCancelled(AgentEvent):
     """用户取消了 Agent 执行"""
+
+
+# ============================================================
+# Loop 模式事件
+# ============================================================
+
+@dataclass
+class LoopStepStart(AgentEvent):
+    """Loop 步骤开始"""
+    step_index: int = 0
+    step_description: str = ""
+    total_steps: int = 0
+
+
+@dataclass
+class LoopStepDone(AgentEvent):
+    """Loop 步骤完成"""
+    step_index: int = 0
+    success: bool = True
+
+
+@dataclass
+class LoopProgress(AgentEvent):
+    """Loop 进度更新"""
+    current_step: int = 0
+    total_steps: int = 0
+    status: Any = None  # LoopStatus
+
+
+@dataclass
+class LoopIssueCreated(AgentEvent):
+    """Loop 创建了一个 issue（跳过步骤）"""
+    step_index: int = 0
+    step_description: str = ""

@@ -38,13 +38,14 @@ pip install -e .
 
 > **注意**：如果你的系统有多个 Python 环境（如 Miniconda、系统 Python），`pip install -e .` 会安装到当前 shell 激活的 Python 环境中。
 
-| 环境类型 | 安装位置 |
-|----------|----------|
+| 环境类型              | 安装位置                                                    |
+| --------------------- | ----------------------------------------------------------- |
 | 系统 Python (Windows) | `C:\Users\{用户}\AppData\Local\Programs\Python\Python3X\` |
-| Miniconda/Anaconda | `{Miniconda路径}\envs\{环境名}\` 或 `{Miniconda路径}\` |
-| 虚拟环境 (.venv) | `项目目录\.venv\` |
+| Miniconda/Anaconda    | `{Miniconda路径}\envs\{环境名}\` 或 `{Miniconda路径}\`  |
+| 虚拟环境 (.venv)      | `项目目录\.venv\`                                         |
 
 **验证当前环境**：
+
 ```bash
 # 查看 Python 路径
 which python
@@ -56,11 +57,13 @@ python -m pip show coomi-agent | grep Location
 ```
 
 **当前安装情况**（本机）：
+
 - Shell Python: `F:\Miniconda3\python.exe`
 - 安装位置: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Lib\site-packages`
 - 可执行文件: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Scripts\coomi.exe`
 
 如需在 Miniconda 环境中使用，执行：
+
 ```bash
 F:\Miniconda3\python.exe -m pip install -e .
 ```
@@ -130,18 +133,18 @@ python -m coomi
 
 ## 内置命令
 
-| 命令 | 说明 |
-|------|------|
-| `/model` | 列出所有可用模型 |
-| `/model <id>` | 切换到指定 Provider |
-| `/context` | 显示当前上下文窗口大小 |
-| `/context 256k` | 设置上下文窗口（如 `128k`、`512k`、`1m`） |
-| `/memory list` | 列出所有记忆 |
-| `/memory add <内容>` | 添加新记忆 |
-| `/memory search <关键词>` | 搜索记忆 |
-| `/memory delete <名称>` | 删除记忆 |
-| `/clear` | 清除当前会话 |
-| `exit` / `quit` | 退出 |
+| 命令                        | 说明                                            |
+| --------------------------- | ----------------------------------------------- |
+| `/model`                  | 列出所有可用模型                                |
+| `/model <id>`             | 切换到指定 Provider                             |
+| `/context`                | 显示当前上下文窗口大小                          |
+| `/context 256k`           | 设置上下文窗口（如 `128k`、`512k`、`1m`） |
+| `/memory list`            | 列出所有记忆                                    |
+| `/memory add <内容>`      | 添加新记忆                                      |
+| `/memory search <关键词>` | 搜索记忆                                        |
+| `/memory delete <名称>`   | 删除记忆                                        |
+| `/clear`                  | 清除当前会话                                    |
+| `exit` / `quit`         | 退出                                            |
 
 ## 架构
 

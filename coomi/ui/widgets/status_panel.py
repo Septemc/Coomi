@@ -25,11 +25,13 @@ class StatusPanel(Widget):
     def __init__(self, status_line: StatusLine, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._sl = status_line
-        self._mode: str = "idle"       # "idle" | "executing" | "compressing" | "plan" | "question"
+        self._mode: str = "idle"       # "idle" | "executing" | "compressing" | "plan" | "question" | "loop"
         self._spinner_char: str = ""
         self._tool_name: str | None = None
         self._compress_info: str = ""
         self._exit_pending: bool = False
+        self._loop_step: int = 0
+        self._loop_total: int = 0
 
     # -- public mutation API ------------------------------------------------
 
@@ -49,6 +51,8 @@ class StatusPanel(Widget):
         self._compress_info = ""
         self._spinner_char = ""
         self._exit_pending = False
+        self._loop_step = 0
+        self._loop_total = 0
         self.refresh()
 
     def set_plan_mode(self, active: bool) -> None:
@@ -62,6 +66,13 @@ class StatusPanel(Widget):
     def set_question_mode(self) -> None:
         """设置问询模式状态"""
         self._mode = "question"
+        self.refresh()
+
+    def set_loop_progress(self, current_step: int, total_steps: int) -> None:
+        """设置 Loop 模式进度"""
+        self._mode = "loop"
+        self._loop_step = current_step
+        self._loop_total = total_steps
         self.refresh()
 
     def set_spinner(self, char: str) -> None:
@@ -110,6 +121,11 @@ class StatusPanel(Widget):
             bottom = (
                 "[bold yellow]⚡ Plan Mode[/bold yellow] "
                 "[dim]| Esc to exit plan[/dim]"
+            )
+        elif self._mode == "loop":
+            bottom = (
+                f"[bold green]🔁 Loop: Step {self._loop_step}/{self._loop_total}[/bold green] "
+                "[dim]| Esc to cancel[/dim]"
             )
         elif self._mode == "compressing":
             bottom = f"[bold yellow]{self._spinner_char} Compress: {self._compress_info}[/bold yellow]"

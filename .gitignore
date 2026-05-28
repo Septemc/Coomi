@@ -76,3 +76,6 @@ scripts/
 
 # Temporary output files
 ssh_out.txt
+
+# Other files
+docs/
