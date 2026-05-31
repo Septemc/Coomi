@@ -5,7 +5,6 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Awaitable
 
 
 class RetryAction(str, Enum):

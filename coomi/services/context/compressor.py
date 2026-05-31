@@ -7,11 +7,10 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 
-from ...types import Message, Session, TokenUsage
+from ...types import Message, Session
 
 # 压缩配置（对齐 Claude Code）
 COMPRESS_THRESHOLD = 0.9     # 超过窗口 90% 即触发压缩
@@ -208,7 +207,7 @@ class ContextCompressor:
 
             return restored_msgs
 
-        except Exception as e:
+        except Exception:
             # 摘要失败，降级为消息裁剪
             return self._trim_old_messages(messages)
 

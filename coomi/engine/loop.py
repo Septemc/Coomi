@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from ..services.context.cache import ToolResultCache
 from ..services.context.compressor import ContextCompressor
@@ -279,7 +279,6 @@ class AgentLoop:
         consecutive_failures = 0      # 连续失败计数（独立于有效迭代）
         total_tool_calls = 0          # 总工具调用次数
         total_tool_errors = 0         # 总工具错误次数
-        force_break_triggered = False # 强制中断标志
 
         while effective_iteration < MAX_ITERATIONS:
             # 取消检查点
@@ -350,7 +349,6 @@ class AgentLoop:
                 reasoning = full_reasoning or None
                 add_assistant_message(session, full_content or None, tool_calls, reasoning)
 
-                any_tool_error = False
                 force_break = False
 
                 for tool_call in tool_calls:
@@ -375,7 +373,6 @@ class AgentLoop:
                     is_stuck = self._loop_detector.is_stuck()
 
                     if is_error:
-                        any_tool_error = True
                         total_tool_errors += 1
                         consecutive_failures += 1
 
@@ -390,7 +387,6 @@ class AgentLoop:
                             break_msg = self._build_force_break_message(tool_call.name, consecutive_count)
                             # 不追加到 result_text，而是作为独立消息注入
                             result_text += f"\n\n{break_msg}"
-                            force_break_triggered = True
                     else:
                         # 工具成功 → 重置连续失败计数
                         consecutive_failures = 0

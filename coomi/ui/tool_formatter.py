@@ -26,7 +26,7 @@ def format_tool_display(name: str, arguments: dict[str, Any] | None = None) -> s
             elif offset is not None:
                 return f"Read {file_path} (from line {offset})"
             return f"Read {file_path}"
-        return f"Read"
+        return "Read"
 
     elif name in ("Write", "Edit"):
         file_path = args.get("file_path", "")

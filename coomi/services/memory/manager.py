@@ -1,11 +1,8 @@
 """记忆管理器 - 管理全局和项目级记忆"""
 from __future__ import annotations
 
-import os
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 from .types import Memory, MemoryType
 

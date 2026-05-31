@@ -67,7 +67,6 @@ class GrepTool(BaseTool):
         output_mode = arguments.get("output_mode", "content")
         case_insensitive = arguments.get("-i", False)
         show_line_numbers = arguments.get("-n", True)
-        context = arguments.get("context", 0)
         head_limit = arguments.get("head_limit", 250)
 
         try:

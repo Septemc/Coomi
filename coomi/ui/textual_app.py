@@ -14,12 +14,13 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from typing import Any
 
 from rich.markdown import Markdown
 from textual import work
 from textual.app import App
 from textual.binding import Binding
-from textual.widgets import Input, Static, TextArea
+from textual.widgets import Input
 
 from .widgets.selectable_rich_log import SelectableRichLog as RichLog
 
@@ -47,7 +48,6 @@ from ..ui.events import (
     UsageUpdate,
 )
 from .status_line import StatusLine, format_token_count
-from .tool_formatter import format_tool_display
 from .widgets.status_panel import StatusPanel
 from .widgets.streaming_preview import StreamingPreview
 from .widgets.tool_call_banner import ToolCallBanner
@@ -458,7 +458,6 @@ class CoomiApp(App):
 
     async def _handle_loop_command(self, args: str) -> None:
         """处理 /loop 命令"""
-        from ..engine.loop_runner import LoopRunner
         from ..engine.spec_parser import parse_spec_file
 
         if args in ("status", "pause", "resume", "stop"):

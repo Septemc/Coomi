@@ -10,10 +10,8 @@
 """
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import AsyncIterator, Callable, Any
 
 from ..types import (
@@ -22,24 +20,16 @@ from ..types import (
     LoopStatus,
     Spec,
     StepResult,
-    ToolCall,
 )
 from ..ui.events import (
     AgentCancelled,
     AgentError,
     AgentEvent,
-    CompressionEvent,
     LoopProgress,
     LoopStepStart,
     LoopStepDone,
     LoopIssueCreated,
-    ReasoningChunk,
     TextChunk,
-    ToolCacheHit,
-    ToolDone,
-    ToolRunning,
-    ToolStart,
-    UsageUpdate,
 )
 from .checkpoint import (
     append_issue,

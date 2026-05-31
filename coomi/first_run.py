@@ -160,7 +160,7 @@ def run_first_time_setup() -> bool:
     # 获取 API Key
     console.print()
     api_key = Prompt.ask(
-        f"[bold]请输入 API Key[/bold]",
+        "[bold]请输入 API Key[/bold]",
         password=True,
     )
 

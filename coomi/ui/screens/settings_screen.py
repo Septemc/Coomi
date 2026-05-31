@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 from typing import Optional
-from rich.table import Table
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container

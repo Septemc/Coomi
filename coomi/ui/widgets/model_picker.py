@@ -40,11 +40,11 @@ class ModelPicker(Widget):
 
         # ── 模式提示 ──
         mode_hint = (
-            f"  Mode: [bold reverse] active [/bold reverse] (持久) | "
-            f"[dim] once_active [/dim] (仅本次)"
+            "  Mode: [bold reverse] active [/bold reverse] (持久) | "
+            "[dim] once_active [/dim] (仅本次)"
             if self._mode == "active"
-            else f"  Mode: [dim] active [/dim] (持久) | "
-            f"[bold reverse] once_active [/bold reverse] (仅本次)"
+            else "  Mode: [dim] active [/dim] (持久) | "
+            "[bold reverse] once_active [/bold reverse] (仅本次)"
         )
         table.add_row(Text.from_markup(mode_hint))
         table.add_row()

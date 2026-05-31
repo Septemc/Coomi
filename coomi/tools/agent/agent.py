@@ -41,9 +41,6 @@ class AgentTool(BaseTool):
         }
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
-        description = arguments["description"]
-        prompt = arguments["prompt"]
-
         return ToolResult(
             success=False,
             output="",

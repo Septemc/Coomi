@@ -34,7 +34,6 @@ class WebFetchTool(BaseTool):
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         url = arguments["url"]
-        prompt = arguments["prompt"]
 
         try:
             import httpx
