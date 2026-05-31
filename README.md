@@ -1,16 +1,14 @@
 # Coomi Agent
 
-受 Claude Code 启发的 AI 编程助手。基于命令行的自主 Agent，能读取文件、编辑代码、执行命令、管理任务 — 全部由 LLM 驱动的"感知-决策-执行"循环完成。
+一个比较纯净的 AI Agent项目。基于CLI的自主 Agent，能读取文件、编辑代码、执行命令、管理任务。
 
 ## 特性
 
-- **自主 Agent 循环** — LLM 自主决定读取、写入、编辑、搜索或回复。支持流式响应和实时 Markdown 渲染。
-- **15+ 内置工具** — 文件操作（Read/Write/Edit）、搜索（Glob/Grep）、Shell（Bash/PowerShell）、网页（Fetch/Search）、任务管理（TodoWrite）、子 Agent、Plan 模式。
-- **多厂商 LLM 支持** — DeepSeek、OpenAI、Anthropic，以及任何兼容 OpenAI API 的服务（通过配置驱动的通用 Provider）。运行时通过 `/model` 切换模型。
-- **三层上下文压缩** — Microcompact（清理旧工具结果）→ 消息裁剪 → LLM 摘要（9 段结构化摘要）。超过上下文窗口 90% 时触发。
-- **三层记忆系统** — 项目本地、项目全局、全局记忆，支持自动提取和语义召回。通过 `/memory` 命令管理。
-- **流式 UI** — 基于 Textual 的 TUI 界面，支持工具调用通知、缓存命中提示、压缩状态显示，以及显示 Token 用量的持久化状态栏。
-- **工具结果缓存** — 大结果缓存到磁盘（7 天有效期），相同工具调用即时返回。
+- **纯净 Agent 设计** — 以开发学习为目标，流程透明，模块边界清晰，便于观察、复盘和二次改造。
+- **核心能力完整** — 覆盖文件操作、搜索、Shell、网页、任务、子 Agent 、 Plan 模式和Loop模式等基础工具链。
+- **可切换的 LLM Provider** — 支持 DeepSeek、OpenAI、Anthropic 和兼容 OpenAI API 的通用服务。
+- **上下文与记忆机制** — 提供上下文压缩、记忆管理、语义召回和工具结果缓存等基础工程能力。
+- **流式终端界面** — 基于 Textual 的 TUI，支持流式输出、工具调用提示和状态信息展示。
 
 ## 快速开始
 
@@ -36,13 +34,15 @@ pip install -e .
 
 ### Python 环境说明
 
-> **注意**：如果你的系统有多个 Python 环境（如 Miniconda、系统 Python），`pip install -e .` 会安装到当前 shell 激活的 Python 环境中。
+> **注意**：如果你的系统有多个 Python 环境，`pip install -e .` 会安装到当前 shell 激活的 Python 环境中。
 
-| 环境类型              | 安装位置                                                    |
-| --------------------- | ----------------------------------------------------------- |
-| 系统 Python (Windows) | `C:\Users\{用户}\AppData\Local\Programs\Python\Python3X\` |
-| Miniconda/Anaconda    | `{Miniconda路径}\envs\{环境名}\` 或 `{Miniconda路径}\`  |
-| 虚拟环境 (.venv)      | `项目目录\.venv\`                                         |
+**推荐安装位置**：默认 Python 环境对应的库目录，也就是当前 Python 解释器的 `site-packages`。
+
+| 环境类型    | 常见安装位置                          |
+| ----------- | ------------------------------------- |
+| 系统 Python | `Python 安装目录\Lib\site-packages` |
+| Conda 环境  | `环境目录\Lib\site-packages`        |
+| 虚拟环境    | `项目目录\.venv\Lib\site-packages`  |
 
 **验证当前环境**：
 
@@ -56,16 +56,12 @@ where python
 python -m pip show coomi-agent | grep Location
 ```
 
-**当前安装情况**（本机）：
+**推荐安装方式**：
 
-- Shell Python: `F:\Miniconda3\python.exe`
-- 安装位置: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Lib\site-packages`
-- 可执行文件: `C:\Users\Septem\AppData\Local\Programs\Python\Python39\Scripts\coomi.exe`
-
-如需在 Miniconda 环境中使用，执行：
+先激活你希望使用的默认 Python 环境，再执行：
 
 ```bash
-F:\Miniconda3\python.exe -m pip install -e .
+python -m pip install -e .
 ```
 
 ### 更新
@@ -95,7 +91,7 @@ coomi
 首次运行时，Coomi 会自动引导你配置 LLM Provider。配置优先级：
 
 1. **环境变量** — 自动检测 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`
-2. **.env 文件** — 项目根目录的 `.env` 文件
+2. **.env 文件** — 项目根目录的 `.env` 文件，用于开发学习使用
 3. **交互式配置** — 终端交互引导
 
 ### 配置文件
@@ -211,6 +207,16 @@ coomi/                          # 主包
 
 MemoryExtractor 自动分析对话并保存相关记忆。MemoryRecall 执行语义选择，将相关记忆注入 System Prompt。
 
+## 项目参考来源
+
+本项目在工程复现和实现思路上参考了以下项目（或源码实现，或界面交互体验）：
+
+- Claude Code
+- Codex
+- OpenCode
+
+参考重点主要是 Agent 主循环、工具调用编排、上下文管理和终端交互方式，不代表与原项目具有相同实现或功能范围。
+
 ## License
 
-MIT
+MIT，详见 [LICENSE](LICENSE)
