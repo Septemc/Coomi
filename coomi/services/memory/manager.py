@@ -43,10 +43,13 @@ class MemoryManager:
         """
         self.global_dir = self._get_global_memory_dir()
         self.project_dir = self._get_project_memory_dir(project_path)
+        self.local_project_dir = self._get_local_project_memory_dir(project_path)
 
         # 确保目录存在
         self._ensure_dir(self.global_dir)
         self._ensure_dir(self.project_dir)
+        if self.local_project_dir:
+            self._ensure_dir(self.local_project_dir)
 
     def _get_global_memory_dir(self) -> Path:
         """获取全局记忆目录"""
@@ -61,6 +64,12 @@ class MemoryManager:
         project_path = Path(project_path).resolve()
         project_hash = self._generate_project_hash(project_path)
         return Path.home() / ".coomi" / "projects" / project_hash / "memory"
+
+    def _get_local_project_memory_dir(self, project_path: str | None) -> Path | None:
+        """获取项目本地记忆目录 .coomi/memory。"""
+        if not project_path:
+            return None
+        return Path(project_path).resolve() / ".coomi" / "memory"
 
     def _generate_project_hash(self, project_path: Path) -> str:
         """生成项目唯一标识"""
@@ -87,14 +96,18 @@ class MemoryManager:
         """
         memories = []
 
-        # 扫描项目目录（优先级高）
-        memories.extend(self._scan_dir(self.project_dir, memory_type))
+        seen_names: set[str] = set()
+        dirs: list[Path] = []
+        if self.local_project_dir:
+            dirs.append(self.local_project_dir)
+        dirs.extend([self.project_dir, self.global_dir])
 
-        # 扫描全局目录（避免重复）
-        project_names = {m.name for m in memories}
-        for m in self._scan_dir(self.global_dir, memory_type):
-            if m.name not in project_names:
-                memories.append(m)
+        for directory in dirs:
+            for memory in self._scan_dir(directory, memory_type):
+                if memory.name in seen_names:
+                    continue
+                memories.append(memory)
+                seen_names.add(memory.name)
 
         return memories
 
@@ -135,7 +148,13 @@ class MemoryManager:
         Returns:
             Memory | None: 记忆对象
         """
-        # 先查项目目录
+        # 先查项目本地目录
+        if self.local_project_dir:
+            memory = self._load_from_dir(self.local_project_dir, name)
+            if memory:
+                return memory
+
+        # 再查项目 hash 目录
         memory = self._load_from_dir(self.project_dir, name)
         if memory:
             return memory
@@ -165,7 +184,10 @@ class MemoryManager:
         Returns:
             bool: 是否成功
         """
-        target_dir = self.global_dir if to_global else self.project_dir
+        if to_global:
+            target_dir = self.global_dir
+        else:
+            target_dir = self.local_project_dir or self.project_dir
         filepath = target_dir / f"{memory.name}.md"
 
         try:
@@ -184,7 +206,17 @@ class MemoryManager:
         Returns:
             bool: 是否成功
         """
-        # 优先删除项目目录
+        # 优先删除项目本地目录
+        if self.local_project_dir:
+            local_path = self.local_project_dir / f"{name}.md"
+            if local_path.exists():
+                try:
+                    local_path.unlink()
+                    return True
+                except Exception:
+                    return False
+
+        # 再删除项目 hash 目录
         project_path = self.project_dir / f"{name}.md"
         if project_path.exists():
             try:
@@ -213,8 +245,8 @@ class MemoryManager:
             stale_marker = " [stale]" if memory.is_stale else ""
             lines.append(f"- [{memory.name}](./{memory.name}.md) — {memory.description}{stale_marker}")
 
-        # 写入项目目录
-        index_path = self._get_index_path(self.project_dir)
+        # 写入最高优先级项目目录
+        index_path = self._get_index_path(self.local_project_dir or self.project_dir)
         index_path.write_text("\n".join(lines), encoding="utf-8")
 
     def get_index_content(self) -> str:

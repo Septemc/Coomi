@@ -41,6 +41,7 @@ class ToolDone(AgentEvent):
     tool_name: str
     elapsed: float = 0.0
     result_preview: str | None = None
+    is_error: bool = False
 
 
 @dataclass

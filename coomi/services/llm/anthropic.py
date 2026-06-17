@@ -61,13 +61,21 @@ class AnthropicProvider(LLMProvider):
                 if msg.get("content"):
                     content.append({"type": "text", "text": msg["content"]})
                 for tc in msg["tool_calls"]:
-                    args = tc["arguments"]
+                    if "function" in tc:
+                        name = tc["function"].get("name", "")
+                        args = tc["function"].get("arguments", "{}")
+                    else:
+                        name = tc.get("name", "")
+                        args = tc.get("arguments", {})
                     if isinstance(args, str):
-                        args = json.loads(args)
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
                     content.append({
                         "type": "tool_use",
                         "id": tc["id"],
-                        "name": tc["name"],
+                        "name": name,
                         "input": args,
                     })
                 converted.append({"role": "assistant", "content": content})
@@ -214,15 +222,20 @@ class AnthropicProvider(LLMProvider):
 
         for idx in sorted(tool_input_accum.keys()):
             acc = tool_input_accum[idx]
+            raw_arguments = "".join(acc["json_fragments"])
             try:
-                arguments = json.loads("".join(acc["json_fragments"]))
-            except (json.JSONDecodeError, KeyError):
+                arguments = json.loads(raw_arguments)
+                parse_error = None
+            except (json.JSONDecodeError, KeyError) as exc:
                 arguments = {}
+                parse_error = str(exc)
             yield {
                 "type": "tool_call",
                 "data": {
                     "id": acc["id"],
                     "name": acc["name"],
                     "arguments": arguments,
+                    "raw_arguments": raw_arguments,
+                    "parse_error": parse_error,
                 },
             }

@@ -13,9 +13,10 @@ import json
 import os
 from typing import Any, AsyncIterator
 
-from ..services.context.cache import ToolResultCache
+from ..security import HookSystem, PermissionLevel, PermissionSystem
 from ..services.context.compressor import ContextCompressor
 from ..services.llm.provider import LLMProvider
+from ..tools.base import ToolConcurrency
 from ..tools.registry import ToolRegistry
 from ..types import ToolCall
 from ..ui.events import (
@@ -25,13 +26,13 @@ from ..ui.events import (
     CompressionEvent,
     ReasoningChunk,
     TextChunk,
-    ToolCacheHit,
     ToolDone,
     ToolRunning,
     ToolStart,
     UsageUpdate,
 )
 from .session import Session, add_assistant_message, add_tool_result, add_user_message, update_token_usage
+from .tool_executor import ToolExecutionOutcome, ToolExecutor
 
 MAX_ITERATIONS = 100           # 总迭代上限（有效迭代，不含连续失败重试）
 MAX_RETRIES = 3                # LLM API 调用重试次数
@@ -39,6 +40,7 @@ MAX_CONSECUTIVE_FAILURES = 5   # 连续失败上限（达到后强制注入警�
 MAX_SAME_TOOL_CALL = 3         # 同一工具同一参数连续调用上限
 LOOP_WARN_THRESHOLD = 3        # 循环检测警告阈值
 LOOP_FORCE_BREAK_THRESHOLD = 5 # 循环检测强制中断阈值
+MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
 
 
 class CancelToken:
@@ -131,15 +133,32 @@ class AgentLoop:
     - 工具崩溃隔离：单个工具异常不影响整体
     """
 
-    def __init__(self, llm: LLMProvider, tool_registry: ToolRegistry,
-                 context_window_size: int = 256_000, app_context: Any = None):
+    def __init__(
+        self,
+        llm: LLMProvider,
+        tool_registry: ToolRegistry,
+        context_window_size: int = 256_000,
+        app_context: Any = None,
+        permission_system: PermissionSystem | None = None,
+        hook_system: HookSystem | None = None,
+        project_path: str | None = None,
+    ):
         self.llm = llm
         self.tool_registry = tool_registry
         self.context_window_size = context_window_size
         self.compressor = ContextCompressor(llm)
-        self.cache = ToolResultCache()
         self._cancel_token = CancelToken()
         self.app_context = app_context  # CoomiApp 实例，交互式工具需要
+        self.permission_system = permission_system or PermissionSystem()
+        self.hook_system = hook_system or HookSystem()
+        self.project_path = project_path or os.getcwd()
+        self.tool_executor = ToolExecutor(
+            tool_registry,
+            permission_system=self.permission_system,
+            hook_system=self.hook_system,
+            app_context=app_context,
+            project_path=self.project_path,
+        )
         self._plan_mode: bool = False
         self._loop_detector = LoopDetector()
 
@@ -154,36 +173,51 @@ class AgentLoop:
     def cancel_token(self) -> CancelToken:
         return self._cancel_token
 
-    async def _execute_tool_async(self, session: Session, tool_call: ToolCall) -> tuple[str, bool]:
+    async def _execute_tool_async(
+        self,
+        session: Session,
+        tool_call: ToolCall,
+    ) -> ToolExecutionOutcome:
         """异步执行工具调用
 
         Returns:
-            (result_text, is_error): 结果文本和是否为错误结果
+            ToolExecutionOutcome
         """
-        cached = self.cache.get(tool_call.name, tool_call.arguments)
-        if cached:
-            # 注意: 缓存的结果可能是之前成功的结果
-            # 失败的结果不应该被缓存（已在下方确保）
-            return cached, False
+        return await self.tool_executor.execute(session, tool_call)
 
-        try:
-            tool = self.tool_registry.get(tool_call.name)
-            if tool and tool.is_interactive:
-                result = await tool.run_async(tool_call.arguments, self.app_context)
-            else:
-                result = await asyncio.to_thread(self.tool_registry.execute_sync, tool_call)
-            is_error = not result.success
-            result_text = (result.output if result.success else f"Error: {result.error}") or ""
-        except Exception as e:
-            result_text = f"Tool execution crashed: {e}"
-            is_error = True
+    def _partition_tool_calls(self, tool_calls: list[ToolCall]) -> list[list[ToolCall]]:
+        """Group consecutive concurrency-safe tool calls into parallel batches."""
+        batches: list[list[ToolCall]] = []
+        current_parallel: list[ToolCall] = []
 
-        # 只缓存成功的结果 — 失败的结果不缓存，以便重试时真正重新执行
-        # 这对于瞬态错误（网络问题、超时等）特别重要
-        if not is_error:
-            self.cache.put(tool_call.name, tool_call.arguments, result_text)
+        for tool_call in tool_calls:
+            if self._can_run_in_parallel(tool_call):
+                current_parallel.append(tool_call)
+                if len(current_parallel) >= MAX_TOOL_CONCURRENCY:
+                    batches.append(current_parallel)
+                    current_parallel = []
+                continue
 
-        return result_text, is_error
+            if current_parallel:
+                batches.append(current_parallel)
+                current_parallel = []
+            batches.append([tool_call])
+
+        if current_parallel:
+            batches.append(current_parallel)
+
+        return batches
+
+    def _can_run_in_parallel(self, tool_call: ToolCall) -> bool:
+        if tool_call.parse_error:
+            return False
+        tool = self.tool_registry.get(tool_call.name)
+        if tool is None or tool.is_interactive:
+            return False
+        if tool.concurrency != ToolConcurrency.PARALLEL:
+            return False
+        permission = self.permission_system.check_permission(tool_call.name, tool_call.arguments)
+        return permission == PermissionLevel.AUTO
 
     async def _check_compress(self, session: Session) -> CompressionEvent | None:
         """检查是否需要压缩，需要时执行并返回事件"""
@@ -342,7 +376,9 @@ class AgentLoop:
                     ToolCall(
                         id=tc["id"] or f"call_{i}_{id(tc)}",
                         name=tc["name"],
-                        arguments=tc["arguments"],
+                        arguments=tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
+                        raw_arguments=tc.get("raw_arguments"),
+                        parse_error=tc.get("parse_error"),
                     )
                     for i, tc in enumerate(tool_calls_data)
                 ]
@@ -351,62 +387,77 @@ class AgentLoop:
 
                 force_break = False
 
-                for tool_call in tool_calls:
-                    total_tool_calls += 1
-                    yield ToolStart(tool_name=tool_call.name, arguments=tool_call.arguments)
-
-                    cached = self.cache.get(tool_call.name, tool_call.arguments)
-                    if cached:
-                        result_text = cached
-                        is_error = False
-                        yield ToolCacheHit(tool_name=tool_call.name)
-                    else:
+                for batch in self._partition_tool_calls(tool_calls):
+                    for tool_call in batch:
+                        total_tool_calls += 1
+                        yield ToolStart(tool_name=tool_call.name, arguments=tool_call.arguments)
                         yield ToolRunning(tool_name=tool_call.name)
-                        result_text, is_error = await self._execute_tool_async(session, tool_call)
-                        yield ToolDone(
-                            tool_name=tool_call.name,
-                            result_preview=result_text[:500] if result_text else None,
+
+                    if len(batch) == 1:
+                        outcomes = [await self._execute_tool_async(session, batch[0])]
+                    else:
+                        outcomes = await asyncio.gather(
+                            *(self._execute_tool_async(session, tool_call) for tool_call in batch)
                         )
 
-                    # ---- 循环检测 ----
-                    consecutive_count = self._loop_detector.record(tool_call.name, tool_call.arguments)
-                    is_stuck = self._loop_detector.is_stuck()
+                    for outcome in outcomes:
+                        tool_call = outcome.tool_call
+                        result_text = outcome.result_text
+                        is_error = outcome.is_error
 
-                    if is_error:
-                        total_tool_errors += 1
-                        consecutive_failures += 1
+                        # ---- 循环检测 ----
+                        consecutive_count = self._loop_detector.record(
+                            tool_call.name,
+                            tool_call.arguments,
+                        )
+                        is_stuck = self._loop_detector.is_stuck()
 
-                        # 注入循环检测警告
-                        warning = self._build_loop_warning(tool_call.name, consecutive_count, is_stuck)
-                        if warning:
-                            result_text += warning
+                        if is_error:
+                            total_tool_errors += 1
+                            consecutive_failures += 1
 
-                        # 强制中断检查
-                        if consecutive_count >= LOOP_FORCE_BREAK_THRESHOLD:
-                            force_break = True
-                            break_msg = self._build_force_break_message(tool_call.name, consecutive_count)
-                            # 不追加到 result_text，而是作为独立消息注入
-                            result_text += f"\n\n{break_msg}"
-                    else:
-                        # 工具成功 → 重置连续失败计数
-                        consecutive_failures = 0
+                            # 注入循环检测警告
+                            warning = self._build_loop_warning(
+                                tool_call.name,
+                                consecutive_count,
+                                is_stuck,
+                            )
+                            if warning:
+                                result_text += warning
 
-                    add_tool_result(session, tool_call.id, result_text)
+                            # 连续失败上限提示必须写进同一个 tool result，
+                            # 不能追加第二个同 ID 的 tool result。
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                result_text += (
+                                    f"\n\n⚠️ 已连续 {consecutive_failures} 次工具调用失败。"
+                                    f"请认真分析错误原因，尝试完全不同的方法。"
+                                )
+                                consecutive_failures = 0
+
+                            # 强制中断检查
+                            if consecutive_count >= LOOP_FORCE_BREAK_THRESHOLD:
+                                force_break = True
+                                break_msg = self._build_force_break_message(
+                                    tool_call.name,
+                                    consecutive_count,
+                                )
+                                result_text += f"\n\n{break_msg}"
+                        else:
+                            # 工具成功 → 重置连续失败计数
+                            consecutive_failures = 0
+
+                        yield ToolDone(
+                            tool_name=tool_call.name,
+                            elapsed=outcome.elapsed,
+                            result_preview=result_text[:500] if result_text else None,
+                            is_error=is_error,
+                        )
+                        add_tool_result(session, tool_call.id, result_text)
 
                 # 工具执行后取消检查
                 if self._cancel_token.is_cancelled:
                     yield AgentCancelled()
                     return
-
-                # ---- 连续失败上限检查 ----
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    # 注入警告但继续循环，不退出
-                    warning_msg = (
-                        f"⚠️ 已连续 {consecutive_failures} 次工具调用失败。"
-                        f"请认真分析错误原因，尝试完全不同的方法。"
-                    )
-                    add_tool_result(session, tool_calls[-1].id, warning_msg)
-                    consecutive_failures = 0  # 重置，给 LLM 新的机会
 
                 # ---- 强制中断处理 ----
                 if force_break:

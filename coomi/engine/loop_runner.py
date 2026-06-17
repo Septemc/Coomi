@@ -45,6 +45,7 @@ from .session import Session, build_system_prompt
 from ..services.llm.provider import LLMProvider
 from ..services.memory.manager import MemoryManager
 from ..services.memory.recall import MemoryRecall
+from ..security import HookSystem, PermissionSystem
 from ..tools.registry import ToolRegistry
 
 
@@ -76,11 +77,15 @@ class LoopRunner:
         tool_registry: ToolRegistry,
         context_window_size: int = 256_000,
         app_context: Any = None,
+        permission_system: PermissionSystem | None = None,
+        hook_system: HookSystem | None = None,
     ):
         self.llm = llm
         self.tool_registry = tool_registry
         self.context_window_size = context_window_size
         self.app_context = app_context
+        self.permission_system = permission_system or PermissionSystem()
+        self.hook_system = hook_system or HookSystem()
         self._cancel_token = CancelToken()
         self._agent: AgentLoop | None = None
         self._step_result: StepResult = StepResult.FAILED  # _execute_step 的结果容器
@@ -146,6 +151,9 @@ class LoopRunner:
             self.tool_registry,
             self.context_window_size,
             app_context=self.app_context,
+            permission_system=self.permission_system,
+            hook_system=self.hook_system,
+            project_path=cwd,
         )
 
         # 6. 开始执行循环
@@ -289,11 +297,16 @@ class LoopRunner:
 
             error_occurred = False
             last_error = ""
+            output_text = ""
+            start_message_count = len(session.messages)
 
             try:
                 # 运行 AgentLoop 执行当前步骤
                 async for event in self._agent.run_stream(session, step_prompt):
                     yield event
+
+                    if isinstance(event, TextChunk):
+                        output_text += event.content
 
                     if isinstance(event, AgentError):
                         if event.is_fatal:
@@ -314,8 +327,20 @@ class LoopRunner:
 
             if not error_occurred:
                 # 成功 — 检查 Agent 是否确认步骤完成
-                self._step_result = StepResult.SUCCESS
-                return
+                if _step_completion_confirmed(
+                    output_text,
+                    session,
+                    start_message_count,
+                    step_index,
+                    len(spec.steps),
+                ):
+                    self._step_result = StepResult.SUCCESS
+                    return
+                error_occurred = True
+                last_error = (
+                    f"Step {step_index + 1} did not include an explicit completion marker. "
+                    f"Expected 'Step {step_index + 1} complete' after satisfying the step."
+                )
 
             # 失败 — 决定下一步
             action, delay = retry_policy.decide_action(step_index, last_error)
@@ -364,6 +389,33 @@ def _build_spec_context(spec: Spec) -> str:
             lines.append(f"- {ac}")
         lines.append("")
     return "\n".join(lines)
+
+
+def _step_completion_confirmed(
+    output_text: str,
+    session: Session,
+    start_message_count: int,
+    step_index: int,
+    total_steps: int,
+) -> bool:
+    """Return True only when the model explicitly confirms step completion."""
+    step_number = step_index + 1
+    markers = [
+        f"Step {step_number} complete",
+        f"Step {step_number} completed",
+        f"✅ Step {step_number} complete",
+        f"步骤 {step_number} 完成",
+    ]
+    if step_number == total_steps:
+        markers.append("LOOP COMPLETE")
+
+    texts = [output_text]
+    for msg in session.messages[start_message_count:]:
+        if msg.role == "assistant" and msg.content:
+            texts.append(msg.content)
+
+    combined = "\n".join(texts).lower()
+    return any(marker.lower() in combined for marker in markers)
 
 
 def _build_step_prompt(spec: Spec, step_index: int, loop_session: LoopSession) -> str:

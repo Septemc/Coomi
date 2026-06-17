@@ -93,12 +93,18 @@ class ContextCompressor:
         estimated = _estimate_tokens_from_dicts(session.get_messages_for_api())
         return estimated > threshold
 
-    async def compress(self, session: Session, context_window_size: int) -> list[Message]:
+    async def compress(
+        self,
+        session: Session,
+        context_window_size: int,
+        force: bool = False,
+    ) -> list[Message]:
         """执行三层压缩
 
         Args:
             session: 当前会话
             context_window_size: 上下文窗口大小
+            force: 是否强制压缩（用于 /compact）
 
         Returns:
             list[Message]: 压缩后的消息列表
@@ -111,7 +117,7 @@ class ContextCompressor:
         messages = self._microcompact(messages)
 
         # 检查是否还需要进一步压缩
-        if _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
+        if not force and _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
             session.messages = messages
             return messages
 
@@ -119,12 +125,13 @@ class ContextCompressor:
         messages = self._trim_old_messages(messages)
 
         # 检查是否还需要进一步压缩
-        if _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
+        if not force and _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
             session.messages = messages
             return messages
 
         # Layer 3: LLM 摘要 - 全量压缩
-        messages = await self._llm_summarize(messages, context_window_size)
+        if force or _estimate_tokens_from_dicts([m.to_dict() for m in messages]) >= threshold:
+            messages = await self._llm_summarize(messages, context_window_size)
         session.messages = messages
         return messages
 
@@ -164,8 +171,47 @@ class ContextCompressor:
         if len(messages) <= KEEP_RECENT_MESSAGES + 1:
             return messages
 
-        # 保留第一条 + 最近 N 条
-        return [messages[0]] + messages[-(KEEP_RECENT_MESSAGES):]
+        groups = self._group_messages_for_trimming(messages)
+        if len(groups) <= 2:
+            return [msg for group in groups for msg in group]
+
+        first_group = groups[0]
+        tail_groups: list[list[Message]] = []
+        kept_count = 0
+        for group in reversed(groups[1:]):
+            tail_groups.insert(0, group)
+            kept_count += len(group)
+            if kept_count >= KEEP_RECENT_MESSAGES:
+                break
+
+        return [msg for group in [first_group, *tail_groups] for msg in group]
+
+    def _group_messages_for_trimming(self, messages: list[Message]) -> list[list[Message]]:
+        """将 assistant 工具调用和紧随其后的 tool result 作为不可切分单元。"""
+        groups: list[list[Message]] = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.role == "assistant" and msg.tool_calls:
+                expected = {tool_call.id for tool_call in msg.tool_calls}
+                group = [msg]
+                j = i + 1
+                while j < len(messages) and messages[j].role == "tool":
+                    if messages[j].tool_call_id in expected:
+                        group.append(messages[j])
+                    j += 1
+                groups.append(group)
+                i = j
+                continue
+
+            if msg.role == "tool":
+                i += 1
+                continue
+
+            groups.append([msg])
+            i += 1
+
+        return groups
 
     async def _llm_summarize(self, messages: list[Message], context_window_size: int) -> list[Message]:
         """Layer 3: LLM 摘要 - 用当前模型生成 9 段结构化摘要
@@ -199,13 +245,8 @@ class ContextCompressor:
                 created_at=datetime.now(),
             )
 
-            # 恢复最近的工具结果（模拟 Claude Code 的 "restore recently accessed files"）
-            recent_tool_results = self._get_recent_tool_results(messages, limit=5)
-            for msg in recent_tool_results:
-                msg.tool_call_id = None  # 清除悬空引用，避免 API 校验失败
-            restored_msgs = [summary_msg] + recent_tool_results
-
-            return restored_msgs
+            recent_context = self._get_recent_plain_messages(messages, limit=4)
+            return [summary_msg] + recent_context
 
         except Exception:
             # 摘要失败，降级为消息裁剪
@@ -231,10 +272,16 @@ class ContextCompressor:
                 lines.append(f"[{msg.role}] {content}")
         return "\n".join(lines)
 
-    def _get_recent_tool_results(self, messages: list[Message], limit: int = 5) -> list[Message]:
-        """获取最近的工具结果消息"""
-        tool_results = [msg for msg in messages if msg.role == "tool"]
-        return tool_results[-limit:] if tool_results else []
+    def _get_recent_plain_messages(self, messages: list[Message], limit: int = 4) -> list[Message]:
+        """获取最近的普通消息，摘要后避免恢复裸 tool 消息。"""
+        plain: list[Message] = []
+        for msg in messages:
+            if msg.role in {"system", "tool"}:
+                continue
+            if msg.role == "assistant" and msg.tool_calls:
+                continue
+            plain.append(msg)
+        return plain[-limit:]
 
 def _estimate_tokens_from_dicts(messages: list[dict[str, Any]]) -> int:
     """从 API 格式的消息字典估算 token 数（模块级函数，供 Provider 层共享）

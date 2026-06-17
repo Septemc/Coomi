@@ -67,14 +67,24 @@ class GenericOpenAIProvider(LLMProvider):
         reasoning_content = getattr(choice.message, "reasoning_content", None)
         tool_calls = None
         if choice.message.tool_calls:
-            tool_calls = [
-                ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=json.loads(tc.function.arguments),
+            tool_calls = []
+            for tc in choice.message.tool_calls:
+                raw_arguments = tc.function.arguments or ""
+                try:
+                    arguments = json.loads(raw_arguments)
+                    parse_error = None
+                except (json.JSONDecodeError, TypeError) as exc:
+                    arguments = {}
+                    parse_error = str(exc)
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=arguments,
+                        raw_arguments=raw_arguments,
+                        parse_error=parse_error,
+                    )
                 )
-                for tc in choice.message.tool_calls
-            ]
 
         usage = None
         if response.usage:
@@ -183,8 +193,14 @@ class GenericOpenAIProvider(LLMProvider):
 
         for idx in sorted(tool_calls_accum.keys()):
             tc = tool_calls_accum[idx]
+            raw_arguments = tc["arguments"]
             try:
-                tc["arguments"] = json.loads(tc["arguments"])
-            except json.JSONDecodeError:
+                tc["arguments"] = json.loads(raw_arguments)
+                tc["parse_error"] = None
+            except (json.JSONDecodeError, TypeError) as exc:
                 tc["arguments"] = {}
+                tc["raw_arguments"] = raw_arguments
+                tc["parse_error"] = str(exc)
+            else:
+                tc["raw_arguments"] = raw_arguments
             yield {"type": "tool_call", "data": tc}

@@ -30,6 +30,7 @@ from ..services.llm.factory import get_config_manager
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
 from ..services.memory.extractor import MemoryExtractor
 from ..services.context.compressor import _estimate_tokens_from_dicts
+from ..security import HookSystem, PermissionSystem
 from ..tools.registry import create_default_registry
 from ..ui.events import (
     AgentCancelled,
@@ -286,6 +287,8 @@ class CoomiApp(App):
 
         # Active provider tracking (may differ from providers.json if once_active was used)
         self._active_provider_id: str = ""
+        self._permission_system = PermissionSystem()
+        self._hook_system = HookSystem()
 
     # -- helpers -----------------------------------------------------------
 
@@ -330,7 +333,15 @@ class CoomiApp(App):
 
         from ..engine.loop import AgentLoop
         ctx_window = self.status_line.get_context_window_size()
-        self._agent = AgentLoop(self._provider, self._tool_registry, ctx_window, app_context=self)
+        self._agent = AgentLoop(
+            self._provider,
+            self._tool_registry,
+            ctx_window,
+            app_context=self,
+            permission_system=self._permission_system,
+            hook_system=self._hook_system,
+            project_path=self._cwd,
+        )
 
         self._ctx = {
             "provider": self._provider,
@@ -412,7 +423,7 @@ class CoomiApp(App):
         elif cmd.startswith("/loop "):
             asyncio.create_task(self._handle_loop_command(cmd[5:].strip()))
         elif cmd == "/compact":
-            self._handle_compact_command()
+            asyncio.create_task(self._handle_compact_command())
         elif cmd == "/clear":
             self._handle_clear()
         elif cmd == "/model":
@@ -523,6 +534,8 @@ class CoomiApp(App):
             tool_registry=self._tool_registry,
             context_window_size=self._agent.context_window_size,
             app_context=self,
+            permission_system=self._permission_system,
+            hook_system=self._hook_system,
         )
         self._loop_mode = True
 
@@ -620,9 +633,24 @@ class CoomiApp(App):
             plan_mode=self._plan_mode,
         )
 
-    def _handle_compact_command(self) -> None:
+    async def _handle_compact_command(self) -> None:
+        if not self._session or not self._agent:
+            self._show_command_result("[dim]No active session[/dim]")
+            return
+        before = len(self._session.messages)
         self._show_command_result("[dim]Compressing context...[/dim]")
-        # TODO: 触发上下文压缩
+        try:
+            compressed = await self._agent.compressor.compress(
+                self._session,
+                self._agent.context_window_size,
+                force=True,
+            )
+            self._session.messages = compressed
+            self._show_command_result(
+                f"[dim]Context compressed: {before} -> {len(compressed)} messages[/dim]"
+            )
+        except Exception as e:
+            self._show_command_result(f"[red]Compact failed: {e}[/red]")
 
     def _show_help(self) -> None:
         help_text = (
@@ -1040,7 +1068,7 @@ class CoomiApp(App):
             await self._handle_loop_command(stripped[5:].strip())
             return
         elif stripped == "/compact":
-            self._handle_compact_command()
+            asyncio.create_task(self._handle_compact_command())
             return
         elif stripped == "/help":
             self._show_help()
@@ -1120,7 +1148,7 @@ class CoomiApp(App):
             asyncio.create_task(self._handle_loop_command(stripped[5:].strip()))
             return
         elif stripped == "/compact":
-            self._handle_compact_command()
+            asyncio.create_task(self._handle_compact_command())
             return
         elif stripped == "/help":
             self._show_help()
@@ -1301,6 +1329,7 @@ class CoomiApp(App):
                             banner.set_done(
                                 result_preview=event.result_preview or "",
                                 cache_hit=False,
+                                is_error=event.is_error,
                             )
                             log.write(banner.build())
                         preview.show_thinking()

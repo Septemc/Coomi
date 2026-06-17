@@ -244,14 +244,12 @@ async def build_system_prompt(
             "- When your plan is ready, call ExitPlanMode to get user approval."
         )
 
-    # 2. 记忆内容（注入完整正文，而非仅索引链接）
+    # 2. 记忆内容（有当前上下文时做相关召回；空上下文只注入索引）
     if memory_manager:
         memory_content = ""
         if memory_recall and current_context:
             selected = await memory_recall.recall(current_context)
             memory_content = memory_manager.get_selected_memory_content(selected)
-        else:
-            memory_content = memory_manager.get_all_memory_content(exclude_stale=True)
 
         if memory_content:
             dynamic_parts.append(
@@ -260,6 +258,15 @@ async def build_system_prompt(
                 "Reference this information when relevant to the user's request:\n\n"
                 + memory_content
             )
+        else:
+            memory_index = memory_manager.get_index_content()
+            if memory_index:
+                dynamic_parts.append(
+                    "## Memory Index\n"
+                    "Memory files are available but not loaded in full for this turn. "
+                    "Relevant memories will be selected when the current request provides enough context:\n\n"
+                    + memory_index
+                )
 
     parts.append("\n\n".join(dynamic_parts))
     return "\n".join(parts)

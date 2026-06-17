@@ -15,6 +15,8 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    raw_arguments: str | None = None
+    parse_error: str | None = None
 
 
 @dataclass
@@ -27,7 +29,7 @@ class Message:
     reasoning_content: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_reasoning: bool = False) -> dict[str, Any]:
         """转换为API格式"""
         msg: dict[str, Any] = {"role": self.role}
 
@@ -50,7 +52,7 @@ class Message:
         if self.tool_call_id:
             msg["tool_call_id"] = self.tool_call_id
 
-        if self.reasoning_content:
+        if include_reasoning and self.reasoning_content:
             msg["reasoning_content"] = self.reasoning_content
 
         return msg
@@ -86,9 +88,9 @@ class Session:
 
     def get_messages_for_api(self) -> list[dict[str, Any]]:
         """获取API格式的消息列表"""
-        result = [{"role": "system", "content": self.system_prompt}]
-        result.extend(msg.to_dict() for msg in self.messages)
-        return result
+        from .services.context.message_guard import prepare_messages_for_api
+
+        return prepare_messages_for_api(self, repair=True)
 
 
 # ============================================================

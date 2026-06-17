@@ -25,6 +25,7 @@ class ToolCallBanner:
         self._elapsed: float = 0.0
         self._result_text: str = ""
         self._cache_hit: bool = False
+        self._is_error: bool = False
         self._expanded: bool = False
 
     def set_arguments(self, arguments: dict) -> None:
@@ -34,11 +35,17 @@ class ToolCallBanner:
         self._state = "running"
         self._start_time = time.time()
 
-    def set_done(self, result_preview: str = "", cache_hit: bool = False) -> None:
+    def set_done(
+        self,
+        result_preview: str = "",
+        cache_hit: bool = False,
+        is_error: bool = False,
+    ) -> None:
         self._state = "done"
         self._elapsed = time.time() - self._start_time
         self._result_text = result_preview or ""
         self._cache_hit = cache_hit
+        self._is_error = is_error
 
     def build(self) -> Table:
         """构建 Rich Table 用于写入 RichLog。"""
@@ -57,6 +64,8 @@ class ToolCallBanner:
     def _get_icon(self) -> str:
         if self._cache_hit:
             return "[bold blue]✓[/bold blue]"
+        if self._is_error:
+            return "[bold red]×[/bold red]"
         if self._state == "done":
             return "[bold green]✓[/bold green]"
         if self._state == "running":
@@ -71,6 +80,8 @@ class ToolCallBanner:
             return f"[bold yellow]Executing... ({elapsed:.1f}s)[/bold yellow]"
         if self._cache_hit:
             return f"[dim]✓ cache ({self._elapsed:.1f}s)[/dim]"
+        if self._is_error:
+            return f"[bold red]failed ({self._elapsed:.1f}s)[/bold red]"
         return f"[dim]✓ ({self._elapsed:.1f}s)[/dim]"
 
     def _get_result_preview(self) -> str:

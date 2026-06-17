@@ -47,14 +47,24 @@ class OpenAIProvider(LLMProvider):
         content = choice.message.content
         tool_calls = None
         if choice.message.tool_calls:
-            tool_calls = [
-                ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=json.loads(tc.function.arguments),
+            tool_calls = []
+            for tc in choice.message.tool_calls:
+                raw_arguments = tc.function.arguments or ""
+                try:
+                    arguments = json.loads(raw_arguments)
+                    parse_error = None
+                except (json.JSONDecodeError, TypeError) as exc:
+                    arguments = {}
+                    parse_error = str(exc)
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=arguments,
+                        raw_arguments=raw_arguments,
+                        parse_error=parse_error,
+                    )
                 )
-                for tc in choice.message.tool_calls
-            ]
 
         usage = None
         if response.usage:
@@ -98,6 +108,7 @@ class OpenAIProvider(LLMProvider):
         response = await self.client.chat.completions.create(**params)
 
         tool_calls_accum: dict[int, dict[str, Any]] = {}
+        tool_names_seen: set[int] = set()
         async for chunk in response:
             if chunk.usage:
                 yield {
@@ -120,6 +131,13 @@ class OpenAIProvider(LLMProvider):
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index
+                    if idx not in tool_names_seen and tc.function and tc.function.name:
+                        tool_names_seen.add(idx)
+                        yield {
+                            "type": "tool_call_start",
+                            "tool_name": tc.function.name,
+                            "index": idx,
+                        }
                     if idx not in tool_calls_accum:
                         tool_calls_accum[idx] = {
                             "id": tc.id or "",
@@ -136,8 +154,14 @@ class OpenAIProvider(LLMProvider):
 
         for idx in sorted(tool_calls_accum.keys()):
             tc = tool_calls_accum[idx]
+            raw_arguments = tc["arguments"]
             try:
-                tc["arguments"] = json.loads(tc["arguments"])
-            except json.JSONDecodeError:
+                tc["arguments"] = json.loads(raw_arguments)
+                tc["parse_error"] = None
+            except (json.JSONDecodeError, TypeError) as exc:
                 tc["arguments"] = {}
+                tc["raw_arguments"] = raw_arguments
+                tc["parse_error"] = str(exc)
+            else:
+                tc["raw_arguments"] = raw_arguments
             yield {"type": "tool_call", "data": tc}
