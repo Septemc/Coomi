@@ -296,18 +296,22 @@ class CoomiApp(App):
 
     # -- helpers -----------------------------------------------------------
 
-    @staticmethod
-    def _wl(log: RichLog, content: str | object) -> None:
+    def _wl(self, log: RichLog, content: str | object) -> None:
         """Append content to RichLog. Rich markup is rendered natively."""
+        try:
+            if hasattr(self.screen, "hide_welcome_panel"):
+                self.screen.hide_welcome_panel()
+        except Exception:
+            pass
         log.write(content)
 
     def _show_welcome_message(self) -> None:
         """显示欢迎消息（在屏幕准备好后调用）"""
         try:
             tool_count = len(self._tool_registry.list_tools())
-            log = self.screen.query_one("#message-log", RichLog)
-            self._wl(log, f"[bold cyan]Coomi Agent[/bold cyan] [dim]({self._display_name}, {tool_count} tools)[/dim]")
-            self._wl(log, "[dim]Commands: /model | /context [256k|512k] | /memory | /clear | exit[/dim]")
+            if hasattr(self.screen, "update_welcome_panel"):
+                self.screen.update_welcome_panel(self._display_name, tool_count)
+                self.screen.show_welcome_panel()
         except Exception:
             pass
 
@@ -1260,7 +1264,10 @@ class CoomiApp(App):
 
         log = self.screen.query_one("#message-log", RichLog)
         log.clear()
-        self._wl(log, "[dim]Session cleared.[/dim]")
+        try:
+            self._show_welcome_message()
+        except Exception:
+            pass
 
     # -- agent execution ---------------------------------------------------
 

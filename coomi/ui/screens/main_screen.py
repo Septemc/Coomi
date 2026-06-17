@@ -19,6 +19,7 @@ from ..widgets.prompt_text_area import PromptTextArea
 from ..widgets.selectable_rich_log import SelectableRichLog
 from ..widgets.status_panel import StatusPanel
 from ..widgets.streaming_preview import StreamingPreview
+from ..widgets.welcome_panel import WelcomePanel
 
 
 class MainScreen(Screen):
@@ -50,6 +51,7 @@ class MainScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield CustomHeader()
+        yield WelcomePanel(id="welcome-panel")
         yield SelectableRichLog(id="message-log", markup=True, wrap=True, highlight=True)
         yield StreamingPreview(id="stream-preview")
         yield StatusPanel(self._status_line, id="status-panel")
@@ -57,6 +59,14 @@ class MainScreen(Screen):
             id="prompt-input",
             placeholder='输入消息（Enter发送，Shift+Enter换行，输入"/"查看指令，双Esc退出）',
         )
+
+    def on_mount(self) -> None:
+        self.message_log.display = False
+        self.welcome_panel.display = True
+
+    @property
+    def welcome_panel(self) -> WelcomePanel:
+        return self.query_one("#welcome-panel", WelcomePanel)
 
     @property
     def message_log(self) -> SelectableRichLog:
@@ -73,6 +83,17 @@ class MainScreen(Screen):
     @property
     def prompt_input(self) -> PromptTextArea:
         return self.query_one("#prompt-input", PromptTextArea)
+
+    def show_welcome_panel(self) -> None:
+        self.message_log.display = False
+        self.welcome_panel.display = True
+
+    def hide_welcome_panel(self) -> None:
+        self.welcome_panel.display = False
+        self.message_log.display = True
+
+    def update_welcome_panel(self, model_display: str, tool_count: int) -> None:
+        self.welcome_panel.set_context(model_display, tool_count)
 
     def action_copy_selected(self) -> None:
         """复制选中的文本"""
