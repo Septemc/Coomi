@@ -112,13 +112,13 @@ class StatusPanel(Widget):
         elif width < 90:
             top = (
                 f"[bold cyan]{model}[/bold cyan] | "
-                f"[yellow]P {permission}[/yellow] | "
+                f"[yellow]>> {permission}[/yellow] | "
                 f"[{ctx_color}]{ctx_text}[/{ctx_color}]"
             )
         else:
             top = (
                 f"[bold cyan]{model}[/bold cyan] | "
-                f"[yellow]P {permission}[/yellow] | "
+                f"[yellow]>> {permission}[/yellow] | "
                 f"[{ctx_color}]{ctx_text}[/{ctx_color}] | "
                 f"[dim]cum: {cum} tokens[/dim]"
             )

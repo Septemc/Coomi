@@ -34,7 +34,7 @@ class CustomHeader(Widget):
         spacer = " " * max(1, width - len(title) - len(setting))
 
         text = Text()
-        text.append(title, style="bold")
+        text.append(title, style="bold cyan")
         text.append(spacer)
         text.append(setting, style="bold cyan")
         return text
