@@ -94,6 +94,7 @@ class StatusPanel(Widget):
 
         table = Table.grid(padding=(0, 0))
         table.add_column(ratio=1)
+        width = max(40, self.size.width or 100)
 
         sl = self._sl
         total = sl.get_context_window_size()
@@ -101,16 +102,26 @@ class StatusPanel(Widget):
         pct = (estimated / total * 100) if total > 0 else 0
         ctx_color = "green" if pct < 50 else ("yellow" if pct < 80 else "red")
 
-        model = sl.model_display or "Coomi"
-        permission = sl.permission_label
+        model = _truncate(sl.model_display or "Coomi", 22 if width >= 90 else 16)
+        permission = _permission_label(sl.permission_label, compact=width < 90)
         cum = format_token_count(sl.cumulative_usage.total_tokens)
+        ctx_text = f"ctx: {pct:.1f}% ({format_token_count(estimated)} / {format_token_count(total)})"
 
-        top = (
-            f"[bold cyan]{model}[/bold cyan] | "
-            f"[yellow]🛡 {permission}[/yellow] | "
-            f"[{ctx_color}]ctx: {pct:.1f}% ({format_token_count(estimated)} / {format_token_count(total)})[/{ctx_color}] | "
-            f"[dim]cum: {cum} tokens[/dim]"
-        )
+        if width < 62:
+            top = f"[bold cyan]{model}[/bold cyan] | [{ctx_color}]{ctx_text}[/{ctx_color}]"
+        elif width < 90:
+            top = (
+                f"[bold cyan]{model}[/bold cyan] | "
+                f"[yellow]P {permission}[/yellow] | "
+                f"[{ctx_color}]{ctx_text}[/{ctx_color}]"
+            )
+        else:
+            top = (
+                f"[bold cyan]{model}[/bold cyan] | "
+                f"[yellow]P {permission}[/yellow] | "
+                f"[{ctx_color}]{ctx_text}[/{ctx_color}] | "
+                f"[dim]cum: {cum} tokens[/dim]"
+            )
 
         if self._exit_pending and self._mode == "idle":
             bottom = "[bold yellow]Press Esc again to exit[/bold yellow]"
@@ -142,3 +153,20 @@ class StatusPanel(Widget):
         table.add_row(top)
         table.add_row(bottom)
         return table
+
+
+def _truncate(value: str, max_len: int) -> str:
+    if len(value) <= max_len:
+        return value
+    return value[:max(1, max_len - 1)] + "…"
+
+
+def _permission_label(label: str, compact: bool) -> str:
+    if not compact:
+        return label
+    mapping = {
+        "Ask for approval": "Ask",
+        "Approve for me": "Auto",
+        "Full access": "Full",
+    }
+    return mapping.get(label, label)

@@ -73,13 +73,15 @@ CommandList {
 #prompt-input {
     dock: bottom;
     height: 5;
+    margin: 0 1 1 1;
     padding: 0 1;
     background: #1c2333;
-    border-top: solid #30363d;
+    border: solid #30363d;
 }
 
 #prompt-input:focus {
     background: #1c2333;
+    border: solid #00a8df;
 }
 
 /* Command Palette */

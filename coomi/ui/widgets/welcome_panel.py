@@ -38,12 +38,11 @@ class WelcomePanel(Widget):
         self.refresh()
 
     def render(self):
-        width = max(60, self.size.width or 100)
-        mascot_width = 24 if width >= 120 else 18
-        bubble_width = min(max(48, width - mascot_width - 16), 82)
-
+        width = max(42, self.size.width or 80)
+        height = max(14, self.size.height or 24)
+        bubble_width = min(70, max(36, width - 8))
         bubble = self._render_bubble(bubble_width)
-        mascot = render_pixel_mascot(width=mascot_width)
+        mascot = render_pixel_mascot(width=12, height=13)
 
         top = Table.grid(expand=True)
         top.add_column(ratio=1)
@@ -51,12 +50,18 @@ class WelcomePanel(Widget):
         top.add_column(ratio=1)
         top.add_row("", bubble, "")
 
-        bottom = Table.grid(expand=True)
-        bottom.add_column(width=mascot_width + 2)
-        bottom.add_column(ratio=1)
-        bottom.add_row(Align.left(mascot), "")
+        mascot_lines = len(mascot.plain.splitlines())
+        bubble_lines = 9 if width >= 58 else 7
+        spacer_lines = max(1, height - bubble_lines - mascot_lines - 3)
+        left_pad = 2 if width < 80 else 4
 
-        return Group(top, Text("\n"), Text("\n"), bottom)
+        bottom = Table.grid(expand=True)
+        bottom.add_column(width=left_pad)
+        bottom.add_column(width=12)
+        bottom.add_column(ratio=1)
+        bottom.add_row("", Align.left(mascot), "")
+
+        return Group(top, Text("\n" * spacer_lines), bottom)
 
     def _render_bubble(self, width: int) -> Panel:
         model = self._model_display or "model pending"
@@ -64,11 +69,17 @@ class WelcomePanel(Widget):
         guide = Text()
         guide.append("准备就绪\n", style="bold cyan")
         guide.append(f"{model} · {tools}\n\n", style="dim")
-        guide.append("Enter 发送消息，Shift+Enter 换行。\n")
-        guide.append("/model 切换模型，/context 调整上下文窗口。\n")
-        guide.append("Shift+Tab 切换工具权限模式。\n")
-        guide.append("Ctrl+P 打开命令面板，Ctrl+C 复制选中文本。\n")
-        guide.append("双击 Esc 退出应用。", style="dim")
+        if width < 50:
+            guide.append("Enter 发送，Shift+Enter 换行。\n")
+            guide.append("/model 模型，/context 上下文。\n")
+            guide.append("Shift+Tab 权限，Ctrl+P 命令。\n")
+            guide.append("双击 Esc 退出。", style="dim")
+        else:
+            guide.append("Enter 发送消息，Shift+Enter 换行。\n")
+            guide.append("/model 切换模型，/context 调整上下文窗口。\n")
+            guide.append("Shift+Tab 切换工具权限模式。\n")
+            guide.append("Ctrl+P 打开命令面板，Ctrl+C 复制选中文本。\n")
+            guide.append("双击 Esc 退出应用。", style="dim")
         return Panel(
             guide,
             width=width,
@@ -79,7 +90,7 @@ class WelcomePanel(Widget):
         )
 
 
-def render_pixel_mascot(width: int = 22) -> Text:
+def render_pixel_mascot(width: int = 12, height: int = 13) -> Text:
     """Render assets/mascot/coomi.png as block pixels."""
     image_path = _find_mascot_path()
     if image_path is None:
@@ -89,8 +100,8 @@ def render_pixel_mascot(width: int = 22) -> Text:
 
     try:
         pixels, src_width, src_height = _load_png_rgba(str(image_path))
-        sampled = _sample_image(pixels, src_width, src_height, width, width)
-        return _pixels_to_half_blocks(sampled, width, width)
+        sampled = _sample_image(pixels, src_width, src_height, width, height)
+        return _pixels_to_half_blocks(sampled, width, height)
     except Exception:
         fallback = Text()
         fallback.append("[ mascot ]", style="bold cyan")

@@ -1,7 +1,7 @@
 """Custom top navigation bar."""
 from __future__ import annotations
 
-from rich.table import Table
+from rich.text import Text
 from textual import events
 from textual.widget import Widget
 
@@ -23,12 +23,21 @@ class CustomHeader(Widget):
     }
     """
 
-    def render(self) -> Table:
-        table = Table.grid(padding=(0, 0))
-        table.add_column(ratio=1)
-        table.add_column(width=10, justify="right")
-        table.add_row("[bold] Coomi Agent[/bold]", "[bold cyan]Setting[/bold cyan] ")
-        return table
+    def render(self) -> Text:
+        width = max(0, self.size.width)
+        title = " Coomi Agent"
+        setting = "Setting "
+        if width <= len(setting) + 2:
+            title = ""
+        elif width < len(title) + len(setting) + 1:
+            title = title[:max(0, width - len(setting) - 1)]
+        spacer = " " * max(1, width - len(title) - len(setting))
+
+        text = Text()
+        text.append(title, style="bold")
+        text.append(spacer)
+        text.append(setting, style="bold cyan")
+        return text
 
     def on_click(self, event: events.Click) -> None:
         if event.x >= max(0, self.size.width - 10):
