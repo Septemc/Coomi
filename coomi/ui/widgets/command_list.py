@@ -15,6 +15,7 @@ COMMANDS = [
     ("/loop", "长线任务执行模式"),
     ("/model", "切换 LLM 模型"),
     ("/context", "设置上下文窗口"),
+    ("/permission", "查看/切换权限模式"),
     ("/memory", "记忆管理"),
     ("/compact", "压缩上下文"),
     ("/clear", "清空会话"),

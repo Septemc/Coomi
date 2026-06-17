@@ -383,7 +383,12 @@ class AgentLoop:
                     for i, tc in enumerate(tool_calls_data)
                 ]
                 reasoning = full_reasoning or None
-                add_assistant_message(session, full_content or None, tool_calls, reasoning)
+                add_assistant_message(
+                    session,
+                    full_content if full_content.strip() else None,
+                    tool_calls,
+                    reasoning,
+                )
 
                 force_break = False
 
@@ -472,7 +477,11 @@ class AgentLoop:
 
                 continue
             else:
-                add_assistant_message(session, full_content, reasoning_content=full_reasoning or None)
+                add_assistant_message(
+                    session,
+                    full_content if full_content.strip() else "",
+                    reasoning_content=full_reasoning or None,
+                )
                 return
 
         # ---- 达到有效迭代上限 ----

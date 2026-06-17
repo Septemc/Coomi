@@ -102,10 +102,12 @@ class StatusPanel(Widget):
         ctx_color = "green" if pct < 50 else ("yellow" if pct < 80 else "red")
 
         model = sl.model_display or "Coomi"
+        permission = sl.permission_label
         cum = format_token_count(sl.cumulative_usage.total_tokens)
 
         top = (
             f"[bold cyan]{model}[/bold cyan] | "
+            f"[yellow]🛡 {permission}[/yellow] | "
             f"[{ctx_color}]ctx: {pct:.1f}% ({format_token_count(estimated)} / {format_token_count(total)})[/{ctx_color}] | "
             f"[dim]cum: {cum} tokens[/dim]"
         )

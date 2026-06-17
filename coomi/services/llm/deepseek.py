@@ -29,6 +29,8 @@ class DeepSeekProvider(GenericOpenAIProvider):
         params = super()._build_params(messages, tools, stream, tool_choice)
         if tools:
             params.setdefault("tool_choice", tool_choice)
+        # DeepSeek-compatible APIs may require thinking disabled when tools are used.
+        params["extra_body"] = {"thinking": {"type": "disabled"}}
         return params
 
     async def chat_stream(

@@ -7,14 +7,15 @@
 """
 from __future__ import annotations
 
-from rich.markdown import Markdown
+from rich.text import Text
 from textual.widgets import Static
 
 
 class StreamingPreview(Static):
     """流式文本预览控件，位于 RichLog 和 StatusPanel 之间。"""
 
-    PREVIEW_MAX_CHARS = 500
+    PREVIEW_MAX_CHARS = 8000
+    PREVIEW_MAX_LINES = 120
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -39,8 +40,12 @@ class StreamingPreview(Static):
             return
         text = self._pending_text
         self._pending_text = None
-        preview = text[-self.PREVIEW_MAX_CHARS:]
-        self.update(Markdown(preview))
+        preview = self._build_preview(text)
+        self.update(Text(preview))
+        try:
+            self.scroll_end(animate=False)
+        except Exception:
+            pass
 
     def show_thinking(self) -> None:
         """显示 thinking 状态。"""
@@ -62,3 +67,11 @@ class StreamingPreview(Static):
         if self._throttle_timer is not None:
             self._throttle_timer.stop()
             self._throttle_timer = None
+
+    def _build_preview(self, text: str) -> str:
+        if len(text) > self.PREVIEW_MAX_CHARS:
+            text = "... [earlier streaming output omitted]\n" + text[-self.PREVIEW_MAX_CHARS:]
+        lines = text.splitlines()
+        if len(lines) > self.PREVIEW_MAX_LINES:
+            lines = ["... [earlier streaming lines omitted]", *lines[-self.PREVIEW_MAX_LINES:]]
+        return "\n".join(lines) if lines else text

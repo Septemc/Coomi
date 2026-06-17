@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from rich.markdown import Markdown
+from textual import events
 from textual import work
 from textual.app import App
 from textual.binding import Binding
@@ -215,6 +216,8 @@ class CoomiApp(App):
     CSS_PATH = "tcss/coomi.tcss"
 
     BINDINGS = [
+        Binding("ctrl+c", "copy_selected", "Copy", priority=True, show=False),
+        Binding("shift+tab", "cycle_permission_mode", "Permission Mode", priority=True),
         Binding("ctrl+p", "command_palette", "Command Palette"),
         # 问询模式导航 — priority=True 在 TextArea BINDINGS 之前检查
         Binding("up", "question_up", "↑", priority=True),
@@ -289,6 +292,7 @@ class CoomiApp(App):
         self._active_provider_id: str = ""
         self._permission_system = PermissionSystem()
         self._hook_system = HookSystem()
+        self.status_line.set_permission_label(self._permission_system.get_mode_label())
 
     # -- helpers -----------------------------------------------------------
 
@@ -425,11 +429,13 @@ class CoomiApp(App):
         elif cmd == "/compact":
             asyncio.create_task(self._handle_compact_command())
         elif cmd == "/clear":
-            self._handle_clear()
+            asyncio.create_task(self._handle_clear())
         elif cmd == "/model":
             asyncio.create_task(self._show_model_picker())
         elif cmd == "/context":
             asyncio.create_task(self._show_context_picker())
+        elif cmd == "/permission":
+            self._show_permission_mode()
         elif cmd == "/memory":
             result = _handle_memory_command(self._memory_manager, "")
             self._show_command_result(result)
@@ -442,6 +448,47 @@ class CoomiApp(App):
             self._wl(log, result)
         except Exception:
             pass
+
+    def _refresh_status_panel(self) -> None:
+        try:
+            status = self.screen.query_one("#status-panel", StatusPanel)
+            status.refresh()
+        except Exception:
+            pass
+
+    def action_copy_selected(self) -> None:
+        """Ctrl+C 只复制消息区选中文本，不触发退出/中断。"""
+        try:
+            log = self.screen.query_one("#message-log", RichLog)
+            selected_text = log.get_selected_text()
+            if selected_text:
+                self.copy_to_clipboard(selected_text)
+        except Exception:
+            pass
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key == "ctrl+c":
+            event.prevent_default()
+            event.stop()
+            self.action_copy_selected()
+
+    def action_cycle_permission_mode(self) -> None:
+        self._permission_system.cycle_mode()
+        self.status_line.set_permission_label(self._permission_system.get_mode_label())
+        self._refresh_status_panel()
+        self._show_command_result(
+            f"[bold yellow]Permission mode:[/bold yellow] "
+            f"{self._permission_system.get_mode_label()}\n"
+            f"[dim]{self._permission_system.get_mode_description()}[/dim]"
+        )
+
+    def _show_permission_mode(self) -> None:
+        self._show_command_result(
+            "[bold cyan]Permission modes[/bold cyan]\n\n"
+            f"Current: [bold yellow]{self._permission_system.get_mode_label()}[/bold yellow]\n"
+            f"[dim]{self._permission_system.get_mode_description()}[/dim]\n\n"
+            "[dim]Press Shift+Tab or run /permission next to cycle.[/dim]"
+        )
 
     async def _handle_plan_command(self) -> None:
         self._plan_mode = True
@@ -660,11 +707,12 @@ class CoomiApp(App):
             "  [bold]/loop[/bold]          长线任务执行模式\n"
             "  [bold]/model[/bold]         切换 LLM 模型\n"
             "  [bold]/context[/bold]       设置上下文窗口大小\n"
+            "  [bold]/permission[/bold]    查看/切换工具权限模式\n"
             "  [bold]/memory[/bold]        记忆管理\n"
             "  [bold]/compact[/bold]       压缩上下文\n"
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
-            "[dim]快捷键: Ctrl+P 命令面板 | Ctrl+R 切换推理 | Esc 取消/退出[/dim]"
+            "[dim]快捷键: Ctrl+P 命令面板 | Ctrl+R 切换推理 | Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
         )
         self._show_command_result(help_text)
 
@@ -964,11 +1012,17 @@ class CoomiApp(App):
 
     def _apply_model_selection(self, provider, mode: str) -> None:
         """应用模型选择结果"""
-        if mode == "active":
-            # 持久化到 providers.json
-            self._config_mgr.set_active(provider.id)
-        # 无论哪种模式，都更新当前会话
-        new_provider = get_llm_provider(provider.id)
+        mode_label = "active (持久)" if mode == "active" else "once_active (仅本次)"
+        self._switch_model(provider.id, persist=(mode == "active"), mode_label=mode_label)
+
+    def _switch_model(self, provider_id: str, persist: bool = True, mode_label: str = "active") -> None:
+        """切换当前会话模型，并立即刷新状态栏。"""
+        if persist and not self._config_mgr.set_active(provider_id):
+            self._show_command_result(f"[red]Model not found: {provider_id}[/red]")
+            return
+
+        new_provider = get_llm_provider(provider_id)
+        self._provider = new_provider
         self._ctx["provider"] = new_provider
         self._ctx["agent"].llm = new_provider
         self._ctx["agent"].compressor.llm = new_provider
@@ -976,12 +1030,14 @@ class CoomiApp(App):
             self._ctx["memory_extractor"].llm = new_provider
         if self._ctx.get("memory_recall"):
             self._ctx["memory_recall"].llm = new_provider
-        self.status_line.set_model(new_provider.model, new_provider.get_model_display_name())
-        self._ctx["display_name"] = new_provider.get_model_display_name()
-        self._active_provider_id = provider.id
-        mode_label = "active (持久)" if mode == "active" else "once_active (仅本次)"
+
+        self._display_name = new_provider.get_model_display_name()
+        self.status_line.set_model(new_provider.model, self._display_name)
+        self._ctx["display_name"] = self._display_name
+        self._active_provider_id = provider_id
+        self._refresh_status_panel()
         self._show_command_result(
-            f"[bold cyan]Switched to:[/bold cyan] {new_provider.get_model_display_name()} "
+            f"[bold cyan]Switched to:[/bold cyan] {self._display_name} "
             f"([dim]{new_provider.model}[/dim]) [{mode_label}]"
         )
 
@@ -1040,9 +1096,8 @@ class CoomiApp(App):
             asyncio.create_task(self._show_model_picker())
             return
         elif stripped.startswith("/model "):
-            command_result = _handle_model_command(
-                self._config_mgr, self.status_line, self._ctx, stripped[6:].strip()
-            )
+            self._switch_model(stripped[6:].strip(), persist=True, mode_label="active")
+            return
         elif stripped == "/context":
             import asyncio
             asyncio.create_task(self._show_context_picker())
@@ -1051,6 +1106,12 @@ class CoomiApp(App):
             command_result = _handle_context_command(
                 self.status_line, self._agent, stripped[8:].strip()
             )
+        elif stripped == "/permission":
+            self._show_permission_mode()
+            return
+        elif stripped == "/permission next":
+            self.action_cycle_permission_mode()
+            return
         elif stripped == "/memory" or stripped.startswith("/memory "):
             command_result = _handle_memory_command(
                 self._memory_manager, stripped[7:].strip()
@@ -1076,6 +1137,7 @@ class CoomiApp(App):
 
         if command_result is not None:
             self._show_command_result(command_result)
+            self._refresh_status_panel()
             return
 
         # --- agent execution ---
@@ -1117,9 +1179,8 @@ class CoomiApp(App):
             asyncio.create_task(self._show_model_picker())
             return
         elif stripped.startswith("/model "):
-            command_result = _handle_model_command(
-                self._config_mgr, self.status_line, self._ctx, stripped[6:].strip()
-            )
+            self._switch_model(stripped[6:].strip(), persist=True, mode_label="active")
+            return
         elif stripped == "/context":
             import asyncio
             asyncio.create_task(self._show_context_picker())
@@ -1128,12 +1189,19 @@ class CoomiApp(App):
             command_result = _handle_context_command(
                 self.status_line, self._agent, stripped[8:].strip()
             )
+        elif stripped == "/permission":
+            self._show_permission_mode()
+            return
+        elif stripped == "/permission next":
+            self.action_cycle_permission_mode()
+            return
         elif stripped == "/memory" or stripped.startswith("/memory "):
             command_result = _handle_memory_command(
                 self._memory_manager, stripped[7:].strip()
             )
         elif stripped == "/clear":
-            self._handle_clear()
+            import asyncio
+            asyncio.create_task(self._handle_clear())
             return
         elif stripped == "/plan":
             import asyncio
@@ -1156,6 +1224,7 @@ class CoomiApp(App):
 
         if command_result is not None:
             self._show_command_result(command_result)
+            self._refresh_status_panel()
             return
 
         # --- agent execution ---

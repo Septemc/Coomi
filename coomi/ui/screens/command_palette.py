@@ -20,6 +20,7 @@ COMMANDS = [
     ("/exit_plan", "退出 Plan Mode"),
     ("/model", "切换 LLM 模型"),
     ("/context", "设置上下文窗口大小"),
+    ("/permission", "查看/切换权限模式"),
     ("/memory", "记忆管理 (list/add/delete/search)"),
     ("/compact", "立即压缩上下文"),
     ("/clear", "清空当前会话历史"),

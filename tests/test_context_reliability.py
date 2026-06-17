@@ -8,8 +8,10 @@ import pytest
 from coomi.engine.loop import AgentLoop
 from coomi.engine.loop_runner import _step_completion_confirmed
 from coomi.engine.tool_executor import ToolExecutor
+from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
 from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
+from coomi.services.llm.generic import ThinkingTagFilter, _strip_thinking_tags
 from coomi.services.llm.provider import LLMProvider
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry
@@ -238,3 +240,33 @@ def test_loop_step_requires_explicit_completion_marker():
         total_steps=2,
     )
 
+
+def test_permission_modes_change_tool_policy():
+    permissions = PermissionSystem()
+
+    permissions.set_mode(PermissionMode.ASK_APPROVAL)
+    assert permissions.check_permission("Read", {"file_path": "x"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("WebFetch", {"url": "https://example.com"}) == PermissionLevel.ASK
+
+    permissions.set_mode(PermissionMode.APPROVE_FOR_ME)
+    assert permissions.check_permission("Write", {"file_path": "x"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("Bash", {"command": "python -m pytest"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("Bash", {"command": "rm -rf /"}) == PermissionLevel.ASK
+
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    assert permissions.check_permission("Bash", {"command": "rm -rf /"}) == PermissionLevel.AUTO
+
+
+def test_thinking_tags_are_removed_from_visible_generic_content():
+    content, reasoning = _strip_thinking_tags("<think>hidden</think>visible")
+    assert content == "visible"
+    assert reasoning == "hidden"
+
+    stream_filter = ThinkingTagFilter()
+    reasoning_1, content_1 = stream_filter.feed("<thi")
+    reasoning_2, content_2 = stream_filter.feed("nk>hidden</think>visible")
+
+    assert reasoning_1 == ""
+    assert content_1 == ""
+    assert reasoning_2 == "hidden"
+    assert content_2 == "visible"

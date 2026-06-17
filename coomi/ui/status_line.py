@@ -68,6 +68,7 @@ class StatusLine:
     def __init__(self):
         self._model_name: str = ""
         self._model_display: str = ""
+        self._permission_label: str = "Ask for approval"
         self._cumulative_usage: TokenUsage = TokenUsage()  # 会话累计
         self.estimated_prompt_tokens: int = 0  # 当前 prompt 估算（公开属性，供 StatusPanel 读取）
         self._window_from_command: int | None = None  # /context 命令设置的值
@@ -96,6 +97,13 @@ class StatusLine:
     @property
     def model_display(self) -> str:
         return self._model_display
+
+    def set_permission_label(self, label: str) -> None:
+        self._permission_label = label
+
+    @property
+    def permission_label(self) -> str:
+        return self._permission_label
 
     @property
     def cumulative_usage(self) -> TokenUsage:

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 
 import httpx
+from openai import BadRequestError
 from openai import AsyncOpenAI
 
 from ...types import LLMResponse, ToolCall
@@ -55,16 +57,49 @@ class GenericOpenAIProvider(LLMProvider):
             params["stream_options"] = {"include_usage": True}
         if tools:
             params["tools"] = tools
-        # 禁用 thinking mode，避免 DeepSeek-compatible API 的
-        # reasoning_content 回传要求导致 400 错误
-        params["extra_body"] = {"thinking": {"type": "disabled"}}
+            params["tool_choice"] = tool_choice
         return params
+
+    def _fallback_params(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Return a less strict request variant for imperfect OpenAI-compatible APIs."""
+        if "extra_body" in params:
+            fallback = dict(params)
+            fallback.pop("extra_body", None)
+            return fallback
+        if "stream_options" in params:
+            fallback = dict(params)
+            fallback.pop("stream_options", None)
+            return fallback
+        if "tool_choice" in params:
+            fallback = dict(params)
+            fallback.pop("tool_choice", None)
+            return fallback
+        return None
+
+    async def _create_completion_with_fallback(self, params: dict[str, Any]):
+        current = params
+        seen: set[str] = set()
+        while True:
+            try:
+                return await self.client.chat.completions.create(**current)
+            except BadRequestError:
+                key = json.dumps(sorted(current.keys()))
+                if key in seen:
+                    raise
+                seen.add(key)
+                fallback = self._fallback_params(current)
+                if fallback is None:
+                    raise
+                current = fallback
 
     def _parse_response(self, response) -> LLMResponse:
         """解析非流式响应 — 子类可覆盖"""
         choice = response.choices[0]
         content = choice.message.content
         reasoning_content = getattr(choice.message, "reasoning_content", None)
+        content, tag_reasoning = _strip_thinking_tags(content)
+        if tag_reasoning:
+            reasoning_content = ((reasoning_content or "") + tag_reasoning).strip()
         tool_calls = None
         if choice.message.tool_calls:
             tool_calls = []
@@ -103,7 +138,7 @@ class GenericOpenAIProvider(LLMProvider):
         **kwargs,
     ) -> LLMResponse:
         params = self._build_params(messages, tools, stream=False)
-        response = await self.client.chat.completions.create(**params)
+        response = await self._create_completion_with_fallback(params)
         return self._parse_response(response)
 
     async def chat_stream(
@@ -112,10 +147,16 @@ class GenericOpenAIProvider(LLMProvider):
         **kwargs,
     ) -> AsyncIterator[str]:
         params = self._build_params(messages, stream=True)
-        response = await self.client.chat.completions.create(**params)
+        response = await self._create_completion_with_fallback(params)
+        thinking_filter = ThinkingTagFilter()
         async for chunk in response:
             if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                reasoning, content = thinking_filter.feed(chunk.choices[0].delta.content)
+                if reasoning:
+                    # chat_stream's legacy API only yields text, so thinking text is suppressed here.
+                    pass
+                if content:
+                    yield content
 
     async def chat_stream_with_tools(
         self,
@@ -125,11 +166,12 @@ class GenericOpenAIProvider(LLMProvider):
     ) -> AsyncIterator[dict[str, Any]]:
         params = self._build_params(messages, tools, stream=True)
 
-        response = await self.client.chat.completions.create(**params)
+        response = await self._create_completion_with_fallback(params)
 
         tool_calls_accum: dict[int, dict[str, Any]] = {}
         tool_names_seen: set[int] = set()
         usage_yielded = False
+        thinking_filter = ThinkingTagFilter()
 
         async for chunk in response:
             if chunk.usage:
@@ -152,7 +194,11 @@ class GenericOpenAIProvider(LLMProvider):
                 yield {"type": "reasoning_content", "content": delta.reasoning_content}
 
             if delta.content:
-                yield {"type": "content", "content": delta.content}
+                reasoning, content = thinking_filter.feed(delta.content)
+                if reasoning:
+                    yield {"type": "reasoning_content", "content": reasoning}
+                if content:
+                    yield {"type": "content", "content": content}
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -204,3 +250,76 @@ class GenericOpenAIProvider(LLMProvider):
             else:
                 tc["raw_arguments"] = raw_arguments
             yield {"type": "tool_call", "data": tc}
+
+
+def _strip_thinking_tags(content: str | None) -> tuple[str | None, str | None]:
+    if not content or "<think>" not in content.lower():
+        return content, None
+    reasoning_parts: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        reasoning_parts.append(match.group(1).strip())
+        return ""
+
+    stripped = re.sub(
+        r"<think>(.*?)</think>",
+        replace,
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    stripped = re.sub(r"</?think>", "", stripped, flags=re.IGNORECASE).strip()
+    reasoning = "\n".join(part for part in reasoning_parts if part)
+    return stripped or None, reasoning or None
+
+
+class ThinkingTagFilter:
+    """Route <think>...</think> stream fragments away from visible content."""
+
+    def __init__(self):
+        self._in_think = False
+        self._pending = ""
+
+    def feed(self, chunk: str) -> tuple[str, str]:
+        text = self._pending + chunk
+        self._pending = ""
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+
+        while text:
+            lower = text.lower()
+            if self._in_think:
+                end = lower.find("</think>")
+                if end == -1:
+                    reasoning_parts.append(text)
+                    text = ""
+                else:
+                    reasoning_parts.append(text[:end])
+                    text = text[end + len("</think>"):]
+                    self._in_think = False
+                continue
+
+            start = lower.find("<think>")
+            if start == -1:
+                keep = _split_possible_tag_prefix(text)
+                if keep:
+                    content_parts.append(text[:-keep])
+                    self._pending = text[-keep:]
+                else:
+                    content_parts.append(text)
+                text = ""
+            else:
+                content_parts.append(text[:start])
+                text = text[start + len("<think>"):]
+                self._in_think = True
+
+        return "".join(reasoning_parts), "".join(content_parts)
+
+
+def _split_possible_tag_prefix(text: str) -> int:
+    tag = "<think>"
+    lower = text.lower()
+    max_len = min(len(tag) - 1, len(text))
+    for size in range(max_len, 0, -1):
+        if tag.startswith(lower[-size:]):
+            return size
+    return 0

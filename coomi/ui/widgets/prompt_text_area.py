@@ -1,8 +1,8 @@
-"""PromptTextArea — 自定义 TextArea，Enter 发送，Ctrl+Enter 换行
+"""PromptTextArea — 自定义 TextArea，Enter 发送，Shift/Ctrl+Enter 换行
 
 重写 _on_key 拦截 Enter，在 TextArea 原生处理之前处理：
 - Enter → 提交（post Submitted message）
-- Ctrl+Enter → 插入换行（调用 super）
+- Shift/Ctrl+Enter → 插入换行
 
 注意：Textual 的 Key 事件用 key 字符串表示修饰键（如 "ctrl+enter"），
 不是布尔属性 event.shift / event.ctrl。
@@ -27,6 +27,7 @@ class PromptTextArea(TextArea):
 
     BINDINGS = [
         Binding("ctrl+enter", "insert_newline", "Insert Newline", show=False),
+        Binding("shift+enter", "insert_newline", "Insert Newline", show=False),
         Binding("ctrl+a", "select_all", "Select All", show=False),
         Binding("ctrl+c", "copy", "Copy", show=False),
         Binding("ctrl+v", "paste", "Paste", show=False),

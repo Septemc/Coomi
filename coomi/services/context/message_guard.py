@@ -78,6 +78,8 @@ def _prepare_transcript_messages(messages: list[Message], repair: bool) -> list[
         assistant_msg = replace(msg, tool_calls=kept_calls or None).to_dict(
             include_reasoning=False
         )
+        if assistant_msg.get("tool_calls") and "content" not in assistant_msg:
+            assistant_msg["content"] = ""
         if not _has_api_content(assistant_msg):
             assistant_msg = {"role": "assistant", "content": "[Tool call removed]"}
         result.append(assistant_msg)
@@ -132,4 +134,3 @@ def _has_api_content(msg: dict[str, Any]) -> bool:
     if msg.get("role") == "tool" and msg.get("tool_call_id"):
         return True
     return False
-

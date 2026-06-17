@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.screen import Screen
 
 from ..widgets.custom_header import CustomHeader
@@ -39,7 +40,8 @@ class MainScreen(Screen):
     BINDINGS = [
         ("escape", "cancel_or_exit", "Cancel / Exit"),
         ("ctrl+r", "toggle_reasoning", "Toggle reasoning"),
-        ("ctrl+c", "copy_selected", "Copy selected"),
+        Binding("ctrl+c", "copy_selected", "Copy selected", priority=True, show=False),
+        Binding("shift+tab", "cycle_permission_mode", "Permission mode", priority=True),
     ]
 
     def __init__(self, status_line=None, **kwargs):
@@ -53,7 +55,7 @@ class MainScreen(Screen):
         yield StatusPanel(self._status_line, id="status-panel")
         yield PromptTextArea(
             id="prompt-input",
-            placeholder='输入消息（Enter发送，Shift+Enter换行，输入"/"查看指令，ESC退出）',
+            placeholder='输入消息（Enter发送，Shift+Enter换行，输入"/"查看指令，双Esc退出）',
         )
 
     @property
@@ -81,6 +83,10 @@ class MainScreen(Screen):
                 self.app.copy_to_clipboard(selected_text)
         except Exception:
             pass
+
+    def action_cycle_permission_mode(self) -> None:
+        """切换工具权限模式"""
+        self.app.action_cycle_permission_mode()
 
     def action_cancel_or_exit(self) -> None:
         """ESC 键处理：如果有选择则清除，否则退出"""

@@ -54,7 +54,7 @@ CommandList {
 /* StreamingPreview - 流式预览 */
 #stream-preview {
     height: auto;
-    max-height: 10;
+    max-height: 40%;
     padding: 0 1;
     background: #000000;
     color: #c9d1d9;
