@@ -50,9 +50,9 @@ MASCOT_PALETTE: dict[str, str] = {
 
 MASCOT_ROWS_12X13: tuple[str, ...] = (
     "....abca....",
-    "...defghij..",
-    ".keGdimnmlj.",
-    ".oeidpqriis.",
+    "...deghij...",
+    ".keGdmnmlj..",
+    ".oeidqpriis.",
     "ktiGddruGdlj",
     "vewxyddyxwej",
     "klzABddBAzlj",
@@ -61,7 +61,7 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     "..E.F..E.E..",
     ".F..F..E..E.",
     ".F.F....E.E.",
-    "...F....E...",
+    ".F.F....E.E.",
 )
 
 
@@ -89,27 +89,53 @@ class WelcomePanel(Widget):
     def render(self):
         width = max(42, self.size.width or 80)
         height = max(14, self.size.height or 24)
-        bubble_width = min(70, max(36, width - 8))
-        bubble = self._render_bubble(bubble_width)
-        mascot = render_pixel_mascot()
+        if width >= 64:
+            return self._render_speech_layout(width, height)
+        return self._render_stacked_layout(width, height)
 
-        top = Table.grid(expand=True)
-        top.add_column(ratio=1)
-        top.add_column(width=bubble_width)
-        top.add_column(ratio=1)
-        top.add_row("", bubble, "")
+    def _render_speech_layout(self, width: int, height: int) -> Group:
+        left_pad = max(2, min(8, width // 12))
+        bubble_width = min(58, max(34, width - left_pad - 30))
+        group_height = max(len(MASCOT_ROWS_12X13), self._bubble_line_count(bubble_width))
+        spacer_lines = max(1, height - group_height - 2)
 
-        bubble_lines = 9 if width >= 58 else 7
-        spacer_lines = max(1, height - bubble_lines - len(MASCOT_ROWS_12X13) - 2)
-        left_pad = 2 if width < 80 else 4
+        row = Table.grid(expand=True)
+        row.add_column(width=left_pad)
+        row.add_column(width=24)
+        row.add_column(width=2)
+        row.add_column(width=bubble_width)
+        row.add_column(ratio=1)
+        row.add_row(
+            "",
+            Align.left(render_pixel_mascot()),
+            "",
+            self._render_bubble(bubble_width),
+            "",
+        )
+        return Group(Text("\n" * spacer_lines), row)
 
-        bottom = Table.grid(expand=True)
-        bottom.add_column(width=left_pad)
-        bottom.add_column(width=24)
-        bottom.add_column(ratio=1)
-        bottom.add_row("", Align.left(mascot), "")
+    def _render_stacked_layout(self, width: int, height: int) -> Group:
+        bubble_width = max(34, width - 6)
+        bubble_lines = self._bubble_line_count(bubble_width)
+        group_height = bubble_lines + 1 + len(MASCOT_ROWS_12X13)
+        spacer_lines = max(0, height - group_height - 1)
 
-        return Group(top, Text("\n" * spacer_lines), bottom)
+        bubble_row = Table.grid(expand=True)
+        bubble_row.add_column(ratio=1)
+        bubble_row.add_column(width=bubble_width)
+        bubble_row.add_column(ratio=1)
+        bubble_row.add_row("", self._render_bubble(bubble_width), "")
+
+        mascot_row = Table.grid(expand=True)
+        mascot_row.add_column(width=2)
+        mascot_row.add_column(width=24)
+        mascot_row.add_column(ratio=1)
+        mascot_row.add_row("", Align.left(render_pixel_mascot()), "")
+        return Group(Text("\n" * spacer_lines), bubble_row, Text("\n"), mascot_row)
+
+    def _bubble_line_count(self, width: int) -> int:
+        # Border + vertical padding + content lines.
+        return 8 if width < 50 else 10
 
     def _render_bubble(self, width: int) -> Panel:
         model = self._model_display or "model pending"
