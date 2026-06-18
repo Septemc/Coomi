@@ -30,6 +30,7 @@ from ..ui.events import (
     LoopStepDone,
     LoopIssueCreated,
     TextChunk,
+    ToolDone,
 )
 from .checkpoint import (
     append_issue,
@@ -298,6 +299,7 @@ class LoopRunner:
             error_occurred = False
             last_error = ""
             output_text = ""
+            tool_error_occurred = False
             start_message_count = len(session.messages)
 
             try:
@@ -307,6 +309,8 @@ class LoopRunner:
 
                     if isinstance(event, TextChunk):
                         output_text += event.content
+                    elif isinstance(event, ToolDone) and event.is_error:
+                        tool_error_occurred = True
 
                     if isinstance(event, AgentError):
                         if event.is_fatal:
@@ -333,6 +337,7 @@ class LoopRunner:
                     start_message_count,
                     step_index,
                     len(spec.steps),
+                    tool_error_occurred=tool_error_occurred,
                 ):
                     self._step_result = StepResult.SUCCESS
                     return
@@ -397,8 +402,9 @@ def _step_completion_confirmed(
     start_message_count: int,
     step_index: int,
     total_steps: int,
+    tool_error_occurred: bool = False,
 ) -> bool:
-    """Return True only when the model explicitly confirms step completion."""
+    """Return True only when the final plain assistant turn confirms completion."""
     step_number = step_index + 1
     markers = [
         f"Step {step_number} complete",
@@ -409,10 +415,22 @@ def _step_completion_confirmed(
     if step_number == total_steps:
         markers.append("LOOP COMPLETE")
 
-    texts = [output_text]
-    for msg in session.messages[start_message_count:]:
-        if msg.role == "assistant" and msg.content:
+    new_messages = session.messages[start_message_count:]
+    last_tool_index = -1
+    for idx, msg in enumerate(new_messages):
+        if msg.role == "tool":
+            last_tool_index = idx
+
+    texts: list[str] = []
+    for msg in new_messages[last_tool_index + 1:]:
+        if msg.role == "assistant" and not msg.tool_calls and msg.content:
             texts.append(msg.content)
+
+    if last_tool_index == -1 and output_text:
+        texts.append(output_text)
+
+    if tool_error_occurred and not texts:
+        return False
 
     combined = "\n".join(texts).lower()
     return any(marker.lower() in combined for marker in markers)

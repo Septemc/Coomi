@@ -1380,6 +1380,10 @@ class CoomiApp(App):
 
                     # --- 工具开始（双重 yield） ---
                     elif isinstance(event, ToolStart):
+                        if self._stream_buffer.strip():
+                            preview.flush_pending()
+                            log.write(Markdown(self._stream_buffer))
+                            self._stream_buffer = ""
                         tool_name = event.tool_name
                         if tool_name in self._active_banners:
                             banner = self._active_banners[tool_name]
@@ -1460,6 +1464,7 @@ class CoomiApp(App):
 
                 # --- 流结束：flush 文本缓冲区 ---
                 if self._stream_buffer.strip():
+                    preview.flush_pending()
                     log.write(Markdown(self._stream_buffer))
                 preview.clear_preview()
 

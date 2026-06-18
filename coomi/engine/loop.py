@@ -168,6 +168,7 @@ class AgentLoop:
 
     def set_plan_mode(self, active: bool) -> None:
         self._plan_mode = active
+        self.tool_executor.read_only_mode = active
 
     @property
     def cancel_token(self) -> CancelToken:

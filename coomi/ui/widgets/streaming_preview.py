@@ -47,6 +47,13 @@ class StreamingPreview(Static):
         except Exception:
             pass
 
+    def flush_pending(self) -> None:
+        """Immediately render pending text before another preview state replaces it."""
+        if self._throttle_timer is not None:
+            self._throttle_timer.stop()
+            self._throttle_timer = None
+        self._flush_text()
+
     def show_thinking(self) -> None:
         """显示 thinking 状态。"""
         self._cancel_throttle()

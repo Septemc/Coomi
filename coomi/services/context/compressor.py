@@ -117,7 +117,7 @@ class ContextCompressor:
         messages = self._microcompact(messages)
 
         # 检查是否还需要进一步压缩
-        if not force and _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
+        if not force and _estimate_tokens_from_messages(messages) < threshold:
             session.messages = messages
             return messages
 
@@ -125,12 +125,12 @@ class ContextCompressor:
         messages = self._trim_old_messages(messages)
 
         # 检查是否还需要进一步压缩
-        if not force and _estimate_tokens_from_dicts([m.to_dict() for m in messages]) < threshold:
+        if not force and _estimate_tokens_from_messages(messages) < threshold:
             session.messages = messages
             return messages
 
         # Layer 3: LLM 摘要 - 全量压缩
-        if force or _estimate_tokens_from_dicts([m.to_dict() for m in messages]) >= threshold:
+        if force or _estimate_tokens_from_messages(messages) >= threshold:
             messages = await self._llm_summarize(messages, context_window_size)
         session.messages = messages
         return messages
@@ -297,3 +297,9 @@ def _estimate_tokens_from_dicts(messages: list[dict[str, Any]]) -> int:
             args = tc.get("function", {}).get("arguments", "")
             total_chars += len(args)
     return max(1, total_chars // 3)
+
+
+def _estimate_tokens_from_messages(messages: list[Message]) -> int:
+    """Estimate tokens from the same repaired payload shape providers receive."""
+    temp = Session(id="estimate", system_prompt="", messages=messages)
+    return _estimate_tokens_from_dicts(temp.get_messages_for_api())

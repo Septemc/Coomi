@@ -143,6 +143,35 @@ def test_compressor_trim_keeps_tool_call_group_together():
     assert "call_keep" in assistant_ids
 
 
+def test_compressor_trimmed_payload_remains_provider_safe():
+    compressor = ContextCompressor()
+    session = Session(id="s", system_prompt="sys")
+    session.messages = [Message(role="user", content="first")]
+    for i in range(14):
+        session.messages.append(Message(role="tool", content=f"orphan {i}", tool_call_id=f"old_{i}"))
+        session.messages.append(Message(role="user", content=f"user {i}"))
+    session.messages.extend(
+        [
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[ToolCall(id="call_keep", name="Read", arguments={"file_path": "x"})],
+            ),
+            Message(role="tool", content="result", tool_call_id="call_keep"),
+        ]
+    )
+
+    session.messages = compressor._trim_old_messages(session.messages)
+    payload = session.get_messages_for_api()
+
+    assert payload[0] == {"role": "system", "content": "sys"}
+    assert not any(msg["role"] == "tool" and msg["tool_call_id"].startswith("old_") for msg in payload)
+    assistant_calls = [msg for msg in payload if msg.get("tool_calls")]
+    assert assistant_calls[-1]["tool_calls"][0]["id"] == "call_keep"
+    assert payload[-1]["role"] == "tool"
+    assert payload[-1]["tool_call_id"] == "call_keep"
+
+
 @pytest.mark.asyncio
 async def test_llm_summarize_does_not_restore_bare_tool_messages():
     compressor = ContextCompressor(FakeSummaryLLM())
@@ -239,6 +268,57 @@ def test_loop_step_requires_explicit_completion_marker():
         step_index=0,
         total_steps=2,
     )
+
+
+def test_loop_step_completion_marker_must_follow_tool_round():
+    session = Session(id="loop")
+    session.messages.extend(
+        [
+            Message(role="assistant", content="Step 1 complete: premature"),
+            Message(
+                role="assistant",
+                tool_calls=[ToolCall(id="call_1", name="Read", arguments={"file_path": "x"})],
+            ),
+            Message(role="tool", content="Error: failed", tool_call_id="call_1"),
+        ]
+    )
+
+    assert not _step_completion_confirmed(
+        "Step 1 complete: premature",
+        session,
+        0,
+        step_index=0,
+        total_steps=2,
+        tool_error_occurred=True,
+    )
+
+    session.messages.append(Message(role="assistant", content="Step 1 complete: fixed"))
+    assert _step_completion_confirmed(
+        "",
+        session,
+        0,
+        step_index=0,
+        total_steps=2,
+        tool_error_occurred=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_blocks_write_tools_before_permission(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = WriteCountingTool()
+    registry.register(tool)
+    executor = ToolExecutor(registry, project_path=str(tmp_path), read_only_mode=True)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Write", arguments={"file_path": "x"}),
+    )
+
+    assert outcome.is_error
+    assert "Plan Mode is active" in outcome.result_text
+    assert tool.calls == 0
 
 
 def test_permission_modes_change_tool_policy():

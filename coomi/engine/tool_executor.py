@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..security import HookSystem, PermissionLevel, PermissionSystem
-from ..tools.base import BaseTool, ToolResult
+from ..tools.base import BaseTool, ToolAccess, ToolResult
 from ..tools.registry import ToolRegistry
 from ..types import Session, ToolCall
 
@@ -41,6 +41,7 @@ class ToolExecutor:
         app_context: Any = None,
         project_path: str | None = None,
         large_result_threshold: int = LARGE_RESULT_THRESHOLD,
+        read_only_mode: bool = False,
     ):
         self.tool_registry = tool_registry
         self.permission_system = permission_system or PermissionSystem()
@@ -48,6 +49,7 @@ class ToolExecutor:
         self.app_context = app_context
         self.project_path = Path(project_path or os.getcwd())
         self.large_result_threshold = large_result_threshold
+        self.read_only_mode = read_only_mode
 
     async def execute(self, session: Session, tool_call: ToolCall) -> ToolExecutionOutcome:
         start = time.perf_counter()
@@ -84,6 +86,22 @@ class ToolExecutor:
                 session,
                 tool_call,
                 ToolResult(False, "", f"InputValidationError: {validation_error}"),
+                start,
+                persist=False,
+            )
+
+        if self.read_only_mode and tool.access != ToolAccess.READ_ONLY and tool.name != "ExitPlanMode":
+            return self._outcome(
+                session,
+                tool_call,
+                ToolResult(
+                    False,
+                    "",
+                    (
+                        f"Plan Mode is active: tool '{tool.name}' is not allowed because it "
+                        "can modify state. Use read-only tools, AskUserQuestion, or ExitPlanMode."
+                    ),
+                ),
                 start,
                 persist=False,
             )
@@ -298,4 +316,3 @@ def _preview(content: str) -> str:
     if newline > PREVIEW_CHARS // 2:
         truncated = truncated[:newline]
     return truncated + "\n..."
-
