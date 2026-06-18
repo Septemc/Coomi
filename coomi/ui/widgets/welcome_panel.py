@@ -50,8 +50,8 @@ MASCOT_PALETTE: dict[str, str] = {
 
 MASCOT_ROWS_12X13: tuple[str, ...] = (
     "....abca....",
-    "...deghij...",
-    ".keGdmnmlj..",
+    "...dehgj....",
+    ".keGdnmmlj..",
     ".oeidqpriis.",
     "ktiGddruGdlj",
     "vewxyddyxwej",
@@ -59,8 +59,8 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     ".kCweGGewCk.",
     "..D.D..D.D..",
     "..E.F..E.E..",
-    "....F..E....",
-    ".F.F....E.E.",
+    ".F..F..E..E.",
+    "...F....E...",
     "...F....E...",
 )
 
