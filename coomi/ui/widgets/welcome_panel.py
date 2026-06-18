@@ -49,19 +49,19 @@ MASCOT_PALETTE: dict[str, str] = {
 }
 
 MASCOT_ROWS_12X13: tuple[str, ...] = (
-    "....abca....",
-    "...dehgj....",
-    ".keGdnmmlj..",
-    ".oeidqpriis.",
-    "ktiGddruGdlj",
-    "vewxyddyxwej",
-    "klzABddBAzlj",
-    ".kCweGGewCk.",
-    "..D.D..D.D..",
-    "..E.F..E.E..",
-    ".F..F..E..E.",
-    "...F....E...",
-    "...F....E...",
+    "....aaaa....",
+    "...dddgdd...",
+    ".adddgggdd..",
+    ".addddgddda.",
+    "adddddddddda",
+    "addxddddxdda",
+    "adzzddddzzda",
+    ".addddddddda.",
+    "..d.d..d.d..",
+    "..d.d..d.d..",
+    ".d..d..d..d.",
+    "...d....d...",
+    "...d....d...",
 )
 
 
