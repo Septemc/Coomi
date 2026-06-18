@@ -100,6 +100,14 @@ class MainScreen(Screen):
     def action_copy_selected(self) -> None:
         """复制选中的文本"""
         try:
+            header = self.query_one(CustomHeader)
+            selected_text = header.get_selected_text()
+            if selected_text:
+                self.app.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
+        try:
             log = self.query_one("#message-log", SelectableRichLog)
             selected_text = log.get_selected_text()
             if selected_text:
@@ -113,6 +121,13 @@ class MainScreen(Screen):
 
     def action_cancel_or_exit(self) -> None:
         """ESC 键处理：如果有选择则清除，否则退出"""
+        try:
+            header = self.query_one(CustomHeader)
+            if header.has_selection():
+                header.clear_selection()
+                return
+        except Exception:
+            pass
         try:
             log = self.query_one("#message-log", SelectableRichLog)
             if log.has_selection():

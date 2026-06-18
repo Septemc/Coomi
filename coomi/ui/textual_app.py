@@ -24,6 +24,7 @@ from textual.binding import Binding
 from textual.widgets import Input
 
 from .widgets.selectable_rich_log import SelectableRichLog as RichLog
+from .widgets.custom_header import CustomHeader
 
 from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
@@ -462,6 +463,14 @@ class CoomiApp(App):
 
     def action_copy_selected(self) -> None:
         """Ctrl+C 只复制消息区选中文本，不触发退出/中断。"""
+        try:
+            header = self.screen.query_one(CustomHeader)
+            selected_text = header.get_selected_text()
+            if selected_text:
+                self.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
         try:
             log = self.screen.query_one("#message-log", RichLog)
             selected_text = log.get_selected_text()
