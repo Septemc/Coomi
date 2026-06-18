@@ -59,9 +59,9 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     ".kCweGGewCk.",
     "..D.D..D.D..",
     "..E.F..E.E..",
-    ".F..F..E..E.",
+    "....F..E....",
     ".F.F....E.E.",
-    ".F.F....E.E.",
+    "...F....E...",
 )
 
 
@@ -94,10 +94,15 @@ class WelcomePanel(Widget):
         return self._render_stacked_layout(width, height)
 
     def _render_speech_layout(self, width: int, height: int) -> Group:
-        left_pad = max(2, min(8, width // 12))
-        bubble_width = min(58, max(34, width - left_pad - 30))
-        group_height = max(len(MASCOT_ROWS_12X13), self._bubble_line_count(bubble_width))
-        spacer_lines = max(1, height - group_height - 2)
+        bubble_width = min(58, max(34, width - 32))
+        group_width = 24 + 2 + bubble_width
+        left_pad = max(2, (width - group_width) // 2)
+        mascot_offset = 2 if height >= 24 else 1
+        group_height = max(
+            len(MASCOT_ROWS_12X13) + mascot_offset,
+            self._bubble_line_count(bubble_width),
+        )
+        spacer_lines = max(1, (height - group_height) // 2)
 
         row = Table.grid(expand=True)
         row.add_column(width=left_pad)
@@ -107,7 +112,7 @@ class WelcomePanel(Widget):
         row.add_column(ratio=1)
         row.add_row(
             "",
-            Align.left(render_pixel_mascot()),
+            Group(Text("\n" * mascot_offset), Align.left(render_pixel_mascot())),
             "",
             self._render_bubble(bubble_width),
             "",

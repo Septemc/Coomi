@@ -112,13 +112,13 @@ class StatusPanel(Widget):
         elif width < 90:
             top = (
                 f"[bold cyan]{model}[/bold cyan] | "
-                f"[yellow]>> {permission}[/yellow] | "
+                f"{_permission_markup(permission)} | "
                 f"[{ctx_color}]{ctx_text}[/{ctx_color}]"
             )
         else:
             top = (
                 f"[bold cyan]{model}[/bold cyan] | "
-                f"[yellow]>> {permission}[/yellow] | "
+                f"{_permission_markup(permission)} | "
                 f"[{ctx_color}]{ctx_text}[/{ctx_color}] | "
                 f"[dim]cum: {cum} tokens[/dim]"
             )
@@ -170,3 +170,16 @@ def _permission_label(label: str, compact: bool) -> str:
         "Full access": "Full",
     }
     return mapping.get(label, label)
+
+
+def _permission_markup(label: str) -> str:
+    colors = {
+        "Ask for approval": "white",
+        "Ask": "white",
+        "Approve for me": "green",
+        "Auto": "green",
+        "Full access": "#ff9d00",
+        "Full": "#ff9d00",
+    }
+    color = colors.get(label, "white")
+    return f"[white]>>[/white] [{color}]{label}[/{color}]"
