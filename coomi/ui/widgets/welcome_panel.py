@@ -67,9 +67,13 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     "...d....d...",
 )
 
-MASCOT_SOURCE_WIDTH = max(len(row) for row in MASCOT_ROWS_12X13)
-MASCOT_MICRO_WIDTH = (MASCOT_SOURCE_WIDTH + 1) // 2
-MASCOT_MICRO_HEIGHT = (len(MASCOT_ROWS_12X13) + 3) // 4
+MASCOT_COMPACT_WIDTH = max(len(row) for row in MASCOT_ROWS_12X13)
+MASCOT_COMPACT_HEIGHT = (len(MASCOT_ROWS_12X13) + 1) // 2
+GUIDE_MIN_WIDTH = 34
+GUIDE_MAX_WIDTH = 60
+MASCOT_GUIDE_GAP = 2
+WELCOME_BOTTOM_MARGIN = 1
+MASCOT_GUIDE_BOTTOM_GAP = 1
 
 
 class WelcomePanel(Widget):
@@ -160,16 +164,19 @@ class WelcomePanel(Widget):
         )
 
     def _render_left_area(self, width: int, height: int) -> Group:
-        bubble_width = min(48, max(28, width - MASCOT_MICRO_WIDTH - 5))
+        bubble_width = min(
+            GUIDE_MAX_WIDTH,
+            max(GUIDE_MIN_WIDTH, width - MASCOT_COMPACT_WIDTH - MASCOT_GUIDE_GAP - 3),
+        )
         bubble = self._render_bubble(bubble_width)
         bubble_lines = self._bubble_line_count(bubble_width)
-        mascot_offset = max(1, bubble_lines - MASCOT_MICRO_HEIGHT - 1)
-        cluster_height = max(bubble_lines, mascot_offset + MASCOT_MICRO_HEIGHT)
-        top_pad = max(0, height - cluster_height - 1)
+        mascot_offset = max(1, bubble_lines - MASCOT_COMPACT_HEIGHT - MASCOT_GUIDE_BOTTOM_GAP)
+        cluster_height = max(bubble_lines, mascot_offset + MASCOT_COMPACT_HEIGHT)
+        top_pad = max(0, height - cluster_height - WELCOME_BOTTOM_MARGIN)
 
         row = Table.grid(expand=False)
-        row.add_column(width=MASCOT_MICRO_WIDTH)
-        row.add_column(width=2)
+        row.add_column(width=MASCOT_COMPACT_WIDTH)
+        row.add_column(width=MASCOT_GUIDE_GAP)
         row.add_column(width=bubble_width)
         row.add_row(
             Group(Text("\n" * mascot_offset), Align.left(render_pixel_mascot())),
@@ -179,23 +186,28 @@ class WelcomePanel(Widget):
         return Group(Text("\n" * top_pad), row)
 
     def _bubble_line_count(self, width: int) -> int:
-        return 7 if width < 42 else 8
+        return 9 if width < 46 else 13
 
     def _render_bubble(self, width: int) -> Panel:
         model = self._model_display or "model pending"
         tools = f"{self._tool_count} tools" if self._tool_count else "tools loading"
         guide = Text()
         guide.append("操作指南\n", style="bold cyan")
-        guide.append(f"{model} · {tools}\n", style="dim")
-        if width < 42:
+        guide.append(f"{model} · {tools}\n\n", style="dim")
+        if width < 46:
             guide.append("Enter 发送，Shift+Enter 换行。\n")
             guide.append("/model 模型，/context 上下文。\n")
+            guide.append("/clear 新会话，↑↓ 选历史。\n")
+            guide.append("F2 Setting，Ctrl+P 命令。\n")
             guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
         else:
             guide.append("Enter 发送消息，Shift+Enter 换行。\n")
-            guide.append("/model 切换模型，/context 调整上下文。\n")
-            guide.append("Shift+Tab 切换权限，Ctrl+P 命令面板。\n")
-            guide.append("双击 Esc 退出应用。", style="dim")
+            guide.append("/model 切换模型，/context 调整上下文窗口。\n")
+            guide.append("/permission 查看权限，Shift+Tab 快速切换。\n")
+            guide.append("/clear 新建会话，/compact 压缩上下文。\n")
+            guide.append("右侧 Sessions 可用鼠标/↑↓/Enter 打开历史。\n")
+            guide.append("Ctrl+P 打开命令面板，F2 打开 Setting。\n")
+            guide.append("Ctrl+C 复制选中文本，双击 Esc 退出应用。", style="dim")
         return Panel(
             guide,
             width=width,
@@ -262,12 +274,14 @@ class WelcomePanel(Widget):
 
 
 def render_pixel_mascot() -> Text:
-    """Render the mascot as very small half-height terminal pixels."""
+    """Render the mascot as compact half-height terminal pixels."""
     text = Text()
-    for row_index in range(0, len(MASCOT_ROWS_12X13), 4):
-        for column in range(0, MASCOT_SOURCE_WIDTH, 2):
-            top_color = _dominant_color(row_index, column, row_span=2, col_span=2)
-            bottom_color = _dominant_color(row_index + 2, column, row_span=2, col_span=2)
+    for row_index in range(0, len(MASCOT_ROWS_12X13), 2):
+        top = MASCOT_ROWS_12X13[row_index]
+        bottom = MASCOT_ROWS_12X13[row_index + 1] if row_index + 1 < len(MASCOT_ROWS_12X13) else ""
+        for column in range(MASCOT_COMPACT_WIDTH):
+            top_color = MASCOT_PALETTE.get(top[column]) if column < len(top) else None
+            bottom_color = MASCOT_PALETTE.get(bottom[column]) if column < len(bottom) else None
             if top_color and bottom_color:
                 text.append("▀", style=Style(color=top_color, bgcolor=bottom_color))
             elif top_color:
@@ -276,22 +290,9 @@ def render_pixel_mascot() -> Text:
                 text.append("▄", style=Style(color=bottom_color))
             else:
                 text.append(" ")
-        if row_index + 4 < len(MASCOT_ROWS_12X13):
+        if row_index + 2 < len(MASCOT_ROWS_12X13):
             text.append("\n")
     return text
-
-
-def _dominant_color(row_start: int, col_start: int, row_span: int, col_span: int) -> str | None:
-    counts: dict[str, int] = {}
-    for row_index in range(row_start, min(row_start + row_span, len(MASCOT_ROWS_12X13))):
-        row = MASCOT_ROWS_12X13[row_index]
-        for column in range(col_start, min(col_start + col_span, len(row))):
-            color = MASCOT_PALETTE.get(row[column])
-            if color:
-                counts[color] = counts.get(color, 0) + 1
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda item: item[1])[0]
 
 
 def _truncate(value: str, max_width: int) -> str:

@@ -222,6 +222,7 @@ class CoomiApp(App):
         Binding("ctrl+c", "copy_selected", "Copy", priority=True, show=False),
         Binding("shift+tab", "cycle_permission_mode", "Permission Mode", priority=True),
         Binding("ctrl+p", "command_palette", "Command Palette"),
+        Binding("f2", "open_settings", "Setting", priority=True),
         # 问询模式导航 — priority=True 在 TextArea BINDINGS 之前检查
         Binding("up", "question_up", "↑", priority=True),
         Binding("down", "question_down", "↓", priority=True),
@@ -774,7 +775,8 @@ class CoomiApp(App):
             "  [bold]/compact[/bold]       压缩上下文\n"
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
-            "[dim]快捷键: Ctrl+P 命令面板 | Ctrl+R 切换推理 | Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
+            "[dim]快捷键: Ctrl+P 命令面板 | F2 Setting | Ctrl+R 切换推理 | "
+            "Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
         )
         self._show_command_result(help_text)
 
