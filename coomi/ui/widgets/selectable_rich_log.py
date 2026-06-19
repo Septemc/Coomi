@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from rich.cells import cell_len, get_character_cell_size
 from rich.segment import Segment
 from rich.style import Style
 from textual import events
@@ -18,8 +19,8 @@ class SelectableRichLog(RichLog):
     ALLOW_SELECT = True
 
     # 选择状态
-    _selection_start: tuple[int, int] | None = None  # (line, col)
-    _selection_end: tuple[int, int] | None = None  # (line, col)
+    _selection_start: tuple[int, int] | None = None  # (line, cell_col)
+    _selection_end: tuple[int, int] | None = None  # (line, cell_col)
     _is_selecting: bool = False
 
     # 高亮颜色：海蓝色
@@ -42,8 +43,9 @@ class SelectableRichLog(RichLog):
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         """鼠标按下：开始选择"""
-        # 计算点击位置对应的 (line, col)
-        pos = self._get_position(event.x, event.y, require_text=True)
+        if event.button not in (1, 3):
+            return
+        pos = self._get_position(event, require_text=True)
         if pos is None:
             self.clear_selection()
             return
@@ -59,7 +61,7 @@ class SelectableRichLog(RichLog):
     def on_mouse_move(self, event: events.MouseMove) -> None:
         """鼠标移动：更新选择范围"""
         if self._is_selecting:
-            pos = self._get_position(event.x, event.y, require_text=False)
+            pos = self._get_position(event, require_text=False)
             if pos is None:
                 return
             line, col = pos
@@ -76,13 +78,19 @@ class SelectableRichLog(RichLog):
 
     def _get_position(
         self,
-        x: int,
-        y: int,
+        event: events.MouseEvent,
         require_text: bool = False,
     ) -> tuple[int, int] | None:
-        """将屏幕坐标转换为 (line, col)"""
+        """将屏幕坐标转换为 (line, cell_col)。"""
+        if require_text:
+            offset = event.get_content_offset(self)
+        else:
+            offset = event.get_content_offset_capture(self)
+        if offset is None:
+            return None
+
         scroll_x, scroll_y = self.scroll_offset
-        line = scroll_y + y
+        line = scroll_y + offset.y
 
         if not self.lines:
             return None
@@ -92,15 +100,15 @@ class SelectableRichLog(RichLog):
                 return None
             line = max(0, min(line, len(self.lines) - 1))
 
-        line_text = self.lines[line].text
-        text_len = len(line_text.rstrip())
-        if text_len == 0:
+        line_text = self.lines[line].text.rstrip()
+        line_cell_len = cell_len(line_text)
+        if line_cell_len == 0:
             return None
 
-        col = max(0, x + scroll_x)
-        if require_text and col >= text_len:
+        col = max(0, offset.x + scroll_x)
+        if require_text and col >= line_cell_len:
             return None
-        return line, min(col, text_len)
+        return line, min(col, line_cell_len)
 
     def render_line(self, y: int) -> Strip:
         """重写行渲染，在选中区域叠加高亮"""
@@ -127,21 +135,24 @@ class SelectableRichLog(RichLog):
             return strip
 
         # 计算该行的选择范围
-        line_text_len = len(strip.text.rstrip())
-        if line_text_len == 0:
+        visible_line_len = cell_len(strip.text.rstrip())
+        if visible_line_len == 0:
             return strip
+        full_line_len = cell_len(self.lines[line_index].text.rstrip()) if 0 <= line_index < len(self.lines) else visible_line_len
 
         if line_index == start_line and line_index == end_line:
             col_start, col_end = start_col, end_col
         elif line_index == start_line:
-            col_start, col_end = start_col, line_text_len
+            col_start, col_end = start_col, full_line_len
         elif line_index == end_line:
             col_start, col_end = 0, end_col
         else:
-            col_start, col_end = 0, line_text_len
+            col_start, col_end = 0, full_line_len
 
-        col_start = max(0, min(col_start, line_text_len))
-        col_end = max(0, min(col_end, line_text_len))
+        col_start -= scroll_x
+        col_end -= scroll_x
+        col_start = max(0, min(col_start, visible_line_len))
+        col_end = max(0, min(col_end, visible_line_len))
         if col_start == col_end:
             return strip
 
@@ -154,32 +165,28 @@ class SelectableRichLog(RichLog):
         col = 0
 
         for segment in strip._segments:
-            seg_text = segment.text
-            seg_len = len(seg_text)
+            seg_len = segment.cell_length
             seg_end = col + seg_len
 
-            if seg_end <= start_x or col >= end_x:
-                # 完全不在选择范围内
+            if segment.control or seg_len == 0 or seg_end <= start_x or col >= end_x:
                 new_segments.append(segment)
-            elif col >= start_x and seg_end <= end_x:
-                # 完全在选择范围内
-                new_segments.append(Segment(
-                    seg_text,
-                    segment.style + style if segment.style else style,
-                    segment.control,
-                ))
             else:
-                # 部分在选择范围内 — 分割
-                for i, char in enumerate(seg_text):
-                    pos = col + i
-                    if start_x <= pos < end_x:
-                        new_segments.append(Segment(
-                            char,
-                            segment.style + style if segment.style else style,
-                            segment.control,
-                        ))
-                    else:
-                        new_segments.append(Segment(char, segment.style, segment.control))
+                left_cut = max(0, start_x - col)
+                right_cut = max(0, end_x - col)
+                left, rest = segment.split_cells(left_cut)
+                middle, right = rest.split_cells(max(0, right_cut - left_cut))
+                if left.text or left.control:
+                    new_segments.append(left)
+                if middle.text or middle.control:
+                    new_segments.append(
+                        Segment(
+                            middle.text,
+                            middle.style + style if middle.style else style,
+                            middle.control,
+                        )
+                    )
+                if right.text or right.control:
+                    new_segments.append(right)
             col = seg_end
 
         return Strip(new_segments)
@@ -202,16 +209,16 @@ class SelectableRichLog(RichLog):
         selected_lines = []
 
         for i in range(start_line, min(end_line + 1, len(lines))):
-            line = lines[i]
-            line_len = len(line.rstrip())
+            line = lines[i].rstrip()
+            line_len = cell_len(line)
             if i == start_line and i == end_line:
-                selected_lines.append(line[min(start_col, line_len):min(end_col, line_len)])
+                selected_lines.append(_slice_text_cells(line, min(start_col, line_len), min(end_col, line_len)))
             elif i == start_line:
-                selected_lines.append(line[min(start_col, line_len):line_len])
+                selected_lines.append(_slice_text_cells(line, min(start_col, line_len), line_len))
             elif i == end_line:
-                selected_lines.append(line[:min(end_col, line_len)])
+                selected_lines.append(_slice_text_cells(line, 0, min(end_col, line_len)))
             else:
-                selected_lines.append(line[:line_len])
+                selected_lines.append(line)
 
         selected = "\n".join(selected_lines)
         return selected if selected else None
@@ -229,3 +236,20 @@ class SelectableRichLog(RichLog):
             and self._selection_end is not None
             and self._selection_start != self._selection_end
         )
+
+
+def _slice_text_cells(text: str, start: int, end: int) -> str:
+    """Slice text by terminal cell offsets, preserving full-width characters."""
+    if end <= start:
+        return ""
+    parts: list[str] = []
+    cell_pos = 0
+    for char in text:
+        width = get_character_cell_size(char)
+        next_pos = cell_pos + width
+        if next_pos > start and cell_pos < end:
+            parts.append(char)
+        if cell_pos >= end:
+            break
+        cell_pos = next_pos
+    return "".join(parts)

@@ -1,7 +1,4 @@
-"""SettingsScreen — 设置面板模态屏
-
-⚙ 齿轮图标点击后显示，选项列表导航。
-"""
+"""SettingsScreen — 设置面板模态屏。"""
 from __future__ import annotations
 
 from typing import Optional
@@ -34,7 +31,7 @@ class SettingsScreen(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Container(id="settings-container"):
-            yield Static("  ⚙ Settings", id="settings-title")
+            yield Static("  Settings", id="settings-title")
             yield Static(self._render_options(), id="settings-options")
 
     def _render_options(self) -> str:

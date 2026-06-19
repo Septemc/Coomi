@@ -59,6 +59,18 @@ class StreamingPreview(Static):
         self._cancel_throttle()
         self.update("[bold yellow]◎ Thinking...[/bold yellow]")
 
+    def show_reasoning(self, text: str) -> None:
+        """显示实时推理内容。"""
+        self._cancel_throttle()
+        preview = self._build_preview(text)
+        output = Text("◎ Thinking\n", style="bold yellow")
+        output.append(preview, style="dim")
+        self.update(output)
+        try:
+            self.scroll_end(animate=False)
+        except Exception:
+            pass
+
     def show_tool(self, tool_name: str) -> None:
         """显示工具执行状态。"""
         self._cancel_throttle()

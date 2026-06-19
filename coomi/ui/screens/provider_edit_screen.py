@@ -68,7 +68,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             }
 
     def compose(self) -> ComposeResult:
-        title = "⚙ Edit Provider" if self._editing else "⚙ New Provider"
+        title = "Edit Provider" if self._editing else "New Provider"
         with Container(id="provider-edit-container"):
             yield Static(f"  {title}", id="provider-edit-title")
 

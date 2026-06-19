@@ -36,7 +36,7 @@ class ProviderListScreen(ModalScreen[Optional[dict]]):
 
     def compose(self) -> ComposeResult:
         with Container(id="provider-list-container"):
-            yield Static("  ⚙ Model Providers", id="provider-list-title")
+            yield Static("  Model Providers", id="provider-list-title")
             yield Static(self._render_list(), id="provider-list-items")
 
     def _render_list(self) -> str:

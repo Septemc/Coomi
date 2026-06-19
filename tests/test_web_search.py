@@ -88,7 +88,7 @@ def test_web_search_uses_sogou_before_bing_for_news_queries(monkeypatch: pytest.
     result = WebSearchTool().run({"query": "Donald Trump latest news"})
 
     assert result.success
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert "from Sogou" in result.output
     assert "Donald Trump latest news" in result.output
     assert "Current political news snippet" in result.output
@@ -116,7 +116,7 @@ def test_web_search_uses_sogou_before_bing_for_chinese_queries(monkeypatch: pyte
     result = WebSearchTool().run({"query": "成都天气预报 明天"})
 
     assert result.success
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert "from Sogou" in result.output
     assert "成都天气预报_明天天气" in result.output
     assert "明天 多云 22~30℃" in result.output

@@ -100,6 +100,12 @@ def _looks_like_news_query(value: str) -> bool:
     return any(term in lowered for term in news_terms)
 
 
+def _looks_like_weather_query(value: str) -> bool:
+    lowered = value.lower()
+    weather_terms = ("weather", "forecast", "temperature", "天气", "气温", "温度", "预报")
+    return any(term in lowered for term in weather_terms)
+
+
 class DuckDuckGoParser(HTMLParser):
     """Parse DuckDuckGo lite/html result pages."""
 
@@ -362,7 +368,7 @@ class WebSearchTool(BaseTool):
         blocked_domains = [str(item) for item in arguments.get("blocked_domains") or []]
         encoded_query = quote_plus(query)
         is_cjk_query = _contains_cjk(query)
-        prefer_sogou = is_cjk_query or _looks_like_news_query(query)
+        prefer_sogou = is_cjk_query or _looks_like_news_query(query) or _looks_like_weather_query(query)
         headers = dict(_HEADERS)
         if not is_cjk_query:
             headers["Accept-Language"] = "en-US,en;q=0.9,zh;q=0.8"
@@ -394,7 +400,7 @@ class WebSearchTool(BaseTool):
             _parse_sogou,
         )
         providers = (
-            [*duckduckgo_providers, sogou_provider, bing_provider]
+            [sogou_provider, *duckduckgo_providers, bing_provider]
             if prefer_sogou
             else [*duckduckgo_providers, bing_provider, sogou_provider]
         )

@@ -222,8 +222,8 @@ class CoomiApp(App):
         Binding("ctrl+c", "copy_selected", "Copy", priority=True, show=False),
         Binding("shift+tab", "cycle_permission_mode", "Permission Mode", priority=True),
         Binding("ctrl+p", "command_palette", "Command Palette"),
-        Binding("f1", "go_home", "Home", priority=True),
-        Binding("f2", "open_settings", "Setting", priority=True),
+        Binding("f2", "go_home", "Home", priority=True),
+        Binding("f3", "open_settings", "Setting", priority=True),
         # 问询模式导航 — priority=True 在 TextArea BINDINGS 之前检查
         Binding("up", "question_up", "↑", priority=True),
         Binding("down", "question_down", "↓", priority=True),
@@ -787,7 +787,7 @@ class CoomiApp(App):
             "  [bold]/compact[/bold]       压缩上下文\n"
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
-            "[dim]快捷键: Ctrl+P 命令面板 | F1 Home | F2 Setting | Ctrl+R 切换推理 | "
+            "[dim]快捷键: Ctrl+P 命令面板 | F2 Home | F3 Setting | Ctrl+R 切换推理 | "
             "Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
         )
         self._show_command_result(help_text)
@@ -1341,6 +1341,14 @@ class CoomiApp(App):
             cwd=self._cwd,
             model=self._display_name,
         )
+        self.status_line.cumulative_usage.input_tokens = 0
+        self.status_line.cumulative_usage.output_tokens = 0
+        self.status_line.cumulative_usage.total_tokens = 0
+        try:
+            log = self.screen.query_one("#message-log", RichLog)
+            log.clear()
+        except Exception:
+            pass
 
     async def _handle_clear(self) -> None:
         old_id = self._session.id
@@ -1485,6 +1493,8 @@ class CoomiApp(App):
                         if not self._full_reasoning:
                             self._reasoning_start_time = time.time()
                         self._full_reasoning += event.content
+                        if self._reasoning_visible:
+                            preview.show_reasoning(self._full_reasoning)
 
                     # --- 工具开始（双重 yield） ---
                     elif isinstance(event, ToolStart):
@@ -1660,7 +1670,7 @@ class CoomiApp(App):
         try:
             preview = self.screen.query_one("#stream-preview", StreamingPreview)
             current = preview.renderable
-            if current and "Thinking" in str(current):
+            if current and "Thinking..." in str(current) and "\n" not in str(current):
                 dots_cycle = ["·  ", "·· ", "···", "·· "]
                 dots = dots_cycle[self._spinner_idx % 4]
                 preview.update(f"[bold yellow]{spinner_char} Thinking{dots}[/bold yellow]")

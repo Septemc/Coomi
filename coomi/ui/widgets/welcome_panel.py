@@ -72,9 +72,9 @@ MASCOT_COMPACT_HEIGHT = (len(MASCOT_ROWS_12X13) + 1) // 2
 GUIDE_MIN_WIDTH = 34
 GUIDE_MAX_WIDTH = 60
 MASCOT_GUIDE_GAP = 2
-WELCOME_BOTTOM_MARGIN = 0
+WELCOME_BOTTOM_MARGIN = 1
 MASCOT_GUIDE_BOTTOM_GAP = 1
-GUIDE_RAISE_LINES = 2
+GUIDE_RAISE_LINES = 4
 
 
 class WelcomePanel(Widget):
@@ -204,7 +204,7 @@ class WelcomePanel(Widget):
             guide.append("/clear 新会话，↑↓ 选历史。\n")
             guide.append("历史记录可鼠标/↑↓选择。\n")
             guide.append("点击/Enter 选中会话。\n")
-            guide.append("F1 Home，F2 Setting。\n")
+            guide.append("F2 Home，F3 Setting。\n")
             guide.append("Ctrl+P 命令面板。\n")
             guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
         else:
@@ -214,7 +214,7 @@ class WelcomePanel(Widget):
             guide.append("/clear 新建会话，/compact 压缩上下文。\n")
             guide.append("历史对话记录中鼠标/上下键可以进行选择，\n")
             guide.append("点击/Enter选中会话。\n")
-            guide.append("Ctrl+P 打开命令面板，F1 返回 Home，F2 打开 Setting。\n")
+            guide.append("Ctrl+P 打开命令面板，F2 返回 Home，F3 打开 Setting。\n")
             guide.append("Ctrl+C 复制选中文本，双击 Esc 退出应用。", style="dim")
         return Panel(
             guide,
