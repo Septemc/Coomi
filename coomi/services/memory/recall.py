@@ -1,7 +1,10 @@
 """记忆召回 - 使用小模型选择相关记忆"""
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import re
 
 from ..llm.factory import create_fast_provider
 from ..llm.provider import LLMProvider
@@ -11,6 +14,46 @@ from .types import Memory, MemoryType
 
 # 召回配置
 RECALL_LIMIT = 5
+RECALL_LLM_TIMEOUT_SECONDS = float(os.environ.get("COOMI_MEMORY_RECALL_TIMEOUT", "1.5"))
+
+_LOW_SIGNAL_EXACT = {
+    "hi",
+    "hello",
+    "hey",
+    "ping",
+    "thanks",
+    "thankyou",
+    "\u4f60\u597d",
+    "\u60a8\u597d",
+    "\u55e8",
+    "\u54c8\u55bd",
+    "\u5728\u5417",
+    "\u4f60\u662f\u8c01",
+    "\u8c22\u8c22",
+}
+
+_MEMORY_SIGNAL_HINTS = (
+    "project",
+    "repo",
+    "preference",
+    "remember",
+    "history",
+    "context",
+    "code",
+    "bug",
+    "test",
+    "\u9879\u76ee",
+    "\u4ee3\u7801",
+    "\u4fee",
+    "\u6539",
+    "\u9519",
+    "\u62a5\u9519",
+    "\u504f\u597d",
+    "\u8bb0\u5fc6",
+    "\u5386\u53f2",
+    "\u4e0a\u4e0b\u6587",
+    "\u5de5\u5177",
+)
 
 
 class MemoryRecall:
@@ -44,14 +87,27 @@ class MemoryRecall:
         if not all_memories:
             return []
 
-        if len(all_memories) <= limit:
-            return all_memories
+        if _is_low_signal_context(context):
+            return []
+
+        local_matches = _select_locally(context, all_memories, limit)
+        if local_matches:
+            return local_matches
+
+        if len(all_memories) <= limit or not _has_enough_signal_for_llm(context):
+            return []
 
         # 构建记忆清单
         memory_index = self._build_memory_index(all_memories)
 
         # 使用小模型选择
-        selected_indices = await self._select_with_llm(context, memory_index, limit)
+        try:
+            selected_indices = await asyncio.wait_for(
+                self._select_with_llm(context, memory_index, limit),
+                timeout=RECALL_LLM_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            selected_indices = []
 
         # 返回选中的记忆
         return [all_memories[i] for i in selected_indices if i < len(all_memories)]
@@ -109,7 +165,7 @@ class MemoryRecall:
         except Exception:
             pass
 
-        return list(range(min(limit, len(memory_index.split('\n')))))
+        return []
 
     async def recall_with_filter(
         self,
@@ -137,14 +193,101 @@ class MemoryRecall:
         if not all_memories:
             return []
 
-        if len(all_memories) <= limit:
-            return all_memories
+        if _is_low_signal_context(context):
+            return []
+
+        local_matches = _select_locally(context, all_memories, limit)
+        if local_matches:
+            return local_matches
+
+        if len(all_memories) <= limit or not _has_enough_signal_for_llm(context):
+            return []
 
         # 构建记忆清单
         memory_index = self._build_memory_index(all_memories)
 
         # 使用小模型选择
-        selected_indices = await self._select_with_llm(context, memory_index, limit)
+        try:
+            selected_indices = await asyncio.wait_for(
+                self._select_with_llm(context, memory_index, limit),
+                timeout=RECALL_LLM_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            selected_indices = []
 
         # 返回选中的记忆
         return [all_memories[i] for i in selected_indices if i < len(all_memories)]
+
+
+def _normalize_context(context: str) -> str:
+    return " ".join((context or "").casefold().strip().split())
+
+
+def _compact_context(context: str) -> str:
+    return re.sub(r"\s+", "", _normalize_context(context))
+
+
+def _is_low_signal_context(context: str) -> bool:
+    compact = _compact_context(context)
+    if not compact:
+        return True
+    stripped = compact.strip(".,!?;:~`'\"()[]{}<>/\\|-_=+*#@$%^&")
+    if not stripped:
+        return True
+    if stripped in _LOW_SIGNAL_EXACT:
+        return True
+    if len(stripped) <= 4 and not any(hint in stripped for hint in _MEMORY_SIGNAL_HINTS):
+        return True
+    return False
+
+
+def _query_terms(context: str) -> set[str]:
+    text = _normalize_context(context)
+    terms: set[str] = set()
+    for match in re.finditer(r"[a-z0-9_./:-]{2,}", text):
+        terms.add(match.group(0))
+    for match in re.finditer(r"[\u4e00-\u9fff]{2,}", text):
+        seq = match.group(0)
+        terms.add(seq)
+        terms.update(seq[i : i + 2] for i in range(len(seq) - 1))
+    return {term for term in terms if len(term) >= 2}
+
+
+def _has_enough_signal_for_llm(context: str) -> bool:
+    if _is_low_signal_context(context):
+        return False
+    compact = _compact_context(context)
+    return len(compact) >= 12 or len(_query_terms(context)) >= 2
+
+
+def _select_locally(context: str, memories: list[Memory], limit: int) -> list[Memory]:
+    terms = _query_terms(context)
+    if not terms:
+        return []
+
+    scored: list[tuple[int, int, Memory]] = []
+    for index, memory in enumerate(memories):
+        score = _score_memory(memory, terms)
+        if score > 0:
+            scored.append((score, -index, memory))
+
+    scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    return [memory for _, _, memory in scored[:limit]]
+
+
+def _score_memory(memory: Memory, terms: set[str]) -> int:
+    fields = (
+        (memory.name.casefold(), 5),
+        (memory.description.casefold(), 3),
+        (memory.content.casefold(), 1),
+    )
+    score = 0
+    for text, weight in fields:
+        if not text:
+            continue
+        for term in terms:
+            if term in text:
+                score += weight + min(len(term), 8)
+    if memory.is_stale and score:
+        score = max(1, score - 1)
+    return score

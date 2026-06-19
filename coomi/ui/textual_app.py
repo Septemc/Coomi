@@ -1444,7 +1444,7 @@ class CoomiApp(App):
 
         prompt.disabled = False
         status.set_executing()
-        preview.show_thinking()
+        preview.show_status("Preparing context")
 
         self._start_spinner()
 
@@ -1456,6 +1456,7 @@ class CoomiApp(App):
                 self._stream_buffer = ""
                 self._full_reasoning = ""
 
+                preview.show_status("Preparing context")
                 self._session.system_prompt = await build_system_prompt(
                     memory_manager=self._memory_manager,
                     memory_recall=self._memory_recall,
@@ -1464,6 +1465,7 @@ class CoomiApp(App):
                     model_display=self._display_name,
                     plan_mode=self._plan_mode,
                 )
+                preview.show_status("Waiting for model")
 
                 async for event in self._agent.run_stream(self._session, user_input):
                     if self._cancel_requested:
@@ -1623,7 +1625,7 @@ class CoomiApp(App):
             preview.clear_preview()
             prompt.disabled = False
 
-            # Post-run memory extraction + token accounting
+            # Post-run token accounting is synchronous; memory extraction is best-effort.
             try:
                 estimated = _estimate_tokens_from_dicts(
                     self._session.get_messages_for_api()
@@ -1632,12 +1634,27 @@ class CoomiApp(App):
                     self._session.token_usage, estimated
                 )
                 status.refresh()
-
-                extracted = await self._memory_extractor.extract(self._session.messages)
-                if extracted:
-                    self._memory_manager.refresh_index()
+                if self._memory_extractor and self._memory_manager:
+                    asyncio.create_task(
+                        self._extract_memory_background(list(self._session.messages))
+                    )
             except Exception:
                 pass
+
+    async def _extract_memory_background(self, messages) -> None:
+        """Best-effort memory extraction that never holds the chat worker open."""
+        if not self._memory_extractor or not self._memory_manager:
+            return
+        try:
+            timeout = float(os.environ.get("COOMI_MEMORY_EXTRACT_TIMEOUT", "3.0"))
+            extracted = await asyncio.wait_for(
+                self._memory_extractor.extract(messages),
+                timeout=timeout,
+            )
+            if extracted:
+                self._memory_manager.refresh_index()
+        except Exception:
+            pass
 
     def _cleanup_banners_on_cancel(self, log: RichLog) -> None:
         """取消时清理所有活跃的 banner。"""
@@ -1669,11 +1686,9 @@ class CoomiApp(App):
         # Animate stream preview dots during thinking
         try:
             preview = self.screen.query_one("#stream-preview", StreamingPreview)
-            current = preview.renderable
-            if current and "Thinking..." in str(current) and "\n" not in str(current):
-                dots_cycle = ["·  ", "·· ", "···", "·· "]
-                dots = dots_cycle[self._spinner_idx % 4]
-                preview.update(f"[bold yellow]{spinner_char} Thinking{dots}[/bold yellow]")
+            dots_cycle = ["   ", ".  ", ".. ", "..."]
+            dots = dots_cycle[self._spinner_idx % 4]
+            preview.tick_status(spinner_char, dots)
         except Exception:
             pass
 

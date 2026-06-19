@@ -42,6 +42,68 @@ LOOP_WARN_THRESHOLD = 3        # 循环检测警告阈值
 LOOP_FORCE_BREAK_THRESHOLD = 5 # 循环检测强制中断阈值
 MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
 
+_TOOL_INTENT_HINTS = (
+    "file",
+    "read",
+    "write",
+    "edit",
+    "code",
+    "repo",
+    "project",
+    "run",
+    "execute",
+    "test",
+    "search",
+    "web",
+    "fetch",
+    "url",
+    "git",
+    "shell",
+    "cmd",
+    "bash",
+    "bug",
+    "fix",
+    "implement",
+    "weather",
+    "news",
+    "latest",
+    "current",
+    "\u6587\u4ef6",
+    "\u8bfb",
+    "\u5199",
+    "\u7f16\u8f91",
+    "\u4fee\u6539",
+    "\u4ee3\u7801",
+    "\u9879\u76ee",
+    "\u8fd0\u884c",
+    "\u6267\u884c",
+    "\u6d4b\u8bd5",
+    "\u641c\u7d22",
+    "\u7f51\u9875",
+    "\u8054\u7f51",
+    "\u7f51\u7ad9",
+    "\u5929\u6c14",
+    "\u65b0\u95fb",
+    "\u6700\u65b0",
+    "\u5f53\u524d",
+    "\u4fee\u590d",
+    "\u5b9e\u73b0",
+    "\u4f18\u5316",
+    "\u8c03\u6574",
+    "\u62a5\u9519",
+    "\u9519\u8bef",
+)
+
+
+def _should_omit_tools_for_input(user_input: str) -> bool:
+    text = " ".join((user_input or "").casefold().strip().split())
+    if not text:
+        return False
+    if any(hint in text for hint in _TOOL_INTENT_HINTS):
+        return False
+    compact = "".join(text.split())
+    return len(compact) <= 24
+
 
 class CancelToken:
     """异步取消令牌"""
@@ -314,6 +376,7 @@ class AgentLoop:
         consecutive_failures = 0      # 连续失败计数（独立于有效迭代）
         total_tool_calls = 0          # 总工具调用次数
         total_tool_errors = 0         # 总工具错误次数
+        omit_tools_for_first_turn = _should_omit_tools_for_input(user_input)
 
         while effective_iteration < MAX_ITERATIONS:
             # 取消检查点
@@ -323,7 +386,10 @@ class AgentLoop:
 
             effective_iteration += 1
             messages = session.get_messages_for_api()
-            tools = self.tool_registry.get_tool_definitions() or None
+            if effective_iteration == 1 and omit_tools_for_first_turn:
+                tools = None
+            else:
+                tools = self.tool_registry.get_tool_definitions() or None
 
             full_content = ""
             full_reasoning = ""

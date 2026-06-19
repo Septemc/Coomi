@@ -295,7 +295,7 @@ async def build_system_prompt(
                 "Reference this information when relevant to the user's request:\n\n"
                 + memory_content
             )
-        else:
+        elif not current_context:
             memory_index = memory_manager.get_index_content()
             if memory_index:
                 dynamic_parts.append(

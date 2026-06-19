@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import time
+
 from rich.text import Text
 from textual.widgets import Static
 
@@ -21,9 +23,12 @@ class StreamingPreview(Static):
         super().__init__(*args, **kwargs)
         self._throttle_timer = None
         self._pending_text: str | None = None
+        self._status_label: str | None = None
+        self._status_started_at: float = 0.0
 
     def show_text(self, text: str) -> None:
         """显示流式文本预览（50ms 节流）。"""
+        self._status_label = None
         self._pending_text = text
         self._start_throttle()
 
@@ -56,12 +61,35 @@ class StreamingPreview(Static):
 
     def show_thinking(self) -> None:
         """显示 thinking 状态。"""
+        self.show_status("Thinking")
+
+    def show_status(self, label: str) -> None:
+        """Show an active waiting state with an elapsed timer."""
         self._cancel_throttle()
-        self.update("[bold yellow]◎ Thinking...[/bold yellow]")
+        self._pending_text = None
+        self._status_label = label
+        self._status_started_at = time.monotonic()
+        self._render_status("◎", "...")
+
+    def tick_status(self, spinner_char: str = "◎", dots: str = "...") -> None:
+        """Animate the current waiting state, if any."""
+        if not self._status_label:
+            return
+        self._render_status(spinner_char, dots)
+
+    def _render_status(self, spinner_char: str, dots: str) -> None:
+        if not self._status_label:
+            return
+        elapsed = time.monotonic() - self._status_started_at
+        elapsed_text = f" [dim]{elapsed:.1f}s[/dim]" if elapsed >= 1.0 else ""
+        self.update(
+            f"[bold yellow]{spinner_char} {self._status_label}{dots}[/bold yellow]{elapsed_text}"
+        )
 
     def show_reasoning(self, text: str) -> None:
         """显示实时推理内容。"""
         self._cancel_throttle()
+        self._status_label = None
         preview = self._build_preview(text)
         output = Text("◎ Thinking\n", style="bold yellow")
         output.append(preview, style="dim")
@@ -74,12 +102,14 @@ class StreamingPreview(Static):
     def show_tool(self, tool_name: str) -> None:
         """显示工具执行状态。"""
         self._cancel_throttle()
+        self._status_label = None
         self.update(f"[bold yellow]⟳ {tool_name}...[/bold yellow]")
 
     def clear_preview(self) -> None:
         """清空预览区。"""
         self._cancel_throttle()
         self._pending_text = None
+        self._status_label = None
         self.update("")
 
     def _cancel_throttle(self) -> None:
