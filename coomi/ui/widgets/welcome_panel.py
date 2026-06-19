@@ -72,8 +72,9 @@ MASCOT_COMPACT_HEIGHT = (len(MASCOT_ROWS_12X13) + 1) // 2
 GUIDE_MIN_WIDTH = 34
 GUIDE_MAX_WIDTH = 60
 MASCOT_GUIDE_GAP = 2
-WELCOME_BOTTOM_MARGIN = 1
+WELCOME_BOTTOM_MARGIN = 0
 MASCOT_GUIDE_BOTTOM_GAP = 1
+GUIDE_RAISE_LINES = 2
 
 
 class WelcomePanel(Widget):
@@ -170,7 +171,10 @@ class WelcomePanel(Widget):
         )
         bubble = self._render_bubble(bubble_width)
         bubble_lines = self._bubble_line_count(bubble_width)
-        mascot_offset = max(1, bubble_lines - MASCOT_COMPACT_HEIGHT - MASCOT_GUIDE_BOTTOM_GAP)
+        mascot_offset = max(
+            1,
+            bubble_lines - MASCOT_COMPACT_HEIGHT - MASCOT_GUIDE_BOTTOM_GAP + GUIDE_RAISE_LINES,
+        )
         cluster_height = max(bubble_lines, mascot_offset + MASCOT_COMPACT_HEIGHT)
         top_pad = max(0, height - cluster_height - WELCOME_BOTTOM_MARGIN)
 
@@ -186,7 +190,7 @@ class WelcomePanel(Widget):
         return Group(Text("\n" * top_pad), row)
 
     def _bubble_line_count(self, width: int) -> int:
-        return 9 if width < 46 else 13
+        return 11 if width < 46 else 14
 
     def _render_bubble(self, width: int) -> Panel:
         model = self._model_display or "model pending"
@@ -198,15 +202,19 @@ class WelcomePanel(Widget):
             guide.append("Enter 发送，Shift+Enter 换行。\n")
             guide.append("/model 模型，/context 上下文。\n")
             guide.append("/clear 新会话，↑↓ 选历史。\n")
-            guide.append("F2 Setting，Ctrl+P 命令。\n")
+            guide.append("历史记录可鼠标/↑↓选择。\n")
+            guide.append("点击/Enter 选中会话。\n")
+            guide.append("F1 Home，F2 Setting。\n")
+            guide.append("Ctrl+P 命令面板。\n")
             guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
         else:
             guide.append("Enter 发送消息，Shift+Enter 换行。\n")
             guide.append("/model 切换模型，/context 调整上下文窗口。\n")
             guide.append("/permission 查看权限，Shift+Tab 快速切换。\n")
             guide.append("/clear 新建会话，/compact 压缩上下文。\n")
-            guide.append("右侧 Sessions 可用鼠标/↑↓/Enter 打开历史。\n")
-            guide.append("Ctrl+P 打开命令面板，F2 打开 Setting。\n")
+            guide.append("历史对话记录中鼠标/上下键可以进行选择，\n")
+            guide.append("点击/Enter选中会话。\n")
+            guide.append("Ctrl+P 打开命令面板，F1 返回 Home，F2 打开 Setting。\n")
             guide.append("Ctrl+C 复制选中文本，双击 Esc 退出应用。", style="dim")
         return Panel(
             guide,
@@ -230,11 +238,9 @@ class WelcomePanel(Widget):
                 absolute_index = self._session_scroll + index
                 rows.append(self._render_session_row(record, absolute_index, max(10, width - 4)))
 
-        used_rows = len(rows) + 2
+        used_rows = len(rows)
         spacer = max(0, content_height - used_rows)
         rows.extend(Text("") for _ in range(spacer))
-        rows.append(Text(" 鼠标/上下键进行选择", style="dim"))
-        rows.append(Text(" 点击/Enter选中会话", style="dim"))
 
         return Panel(
             Group(*rows),

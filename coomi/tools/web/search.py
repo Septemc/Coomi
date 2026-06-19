@@ -323,7 +323,10 @@ class WebSearchTool(BaseTool):
     """搜索网页"""
 
     name = "WebSearch"
-    description = "Search the web for current information."
+    description = (
+        "Search the live web for current, recent, or location-specific public information, "
+        "including weather forecasts, news, prices, releases, and facts that may have changed."
+    )
     access = ToolAccess.READ_ONLY
     concurrency = ToolConcurrency.PARALLEL
     requires_confirmation = False

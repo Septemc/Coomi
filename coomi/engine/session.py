@@ -74,6 +74,12 @@ dedicated tools allows the user to better understand and review your work:
 - Create files with the Write tool, not echo redirection
 - Search for files with the Glob tool, not find or ls
 - Search content with the Grep tool, not grep or rg
+- Use WebSearch for current, recent, time-sensitive, or location-specific public
+  information, including weather forecasts, news, prices, releases, and facts that may
+  have changed. Do not answer these from memory when WebSearch is available.
+- Do not refuse ordinary weather/news/general factual questions solely because they are
+  not software engineering tasks. Use WebSearch, cite the retrieved result in plain text,
+  and clearly state uncertainty if search results are incomplete.
 
 ## Plan Mode
 When you receive "Plan Mode is ACTIVE" in the environment section:
@@ -257,6 +263,14 @@ async def build_system_prompt(
         env_lines.append("- **Plan Mode is ACTIVE**")
     dynamic_parts.append("\n".join(env_lines))
 
+    if _requires_web_search_context(current_context):
+        dynamic_parts.append(
+            "## Current Request Tool Routing\n"
+            "The current user request appears to require current or location-specific public "
+            "information. You must call WebSearch before giving the final answer. This includes "
+            "weather forecasts, news, latest events, prices, and other time-sensitive facts."
+        )
+
     # 1.5 Plan Mode 指令（仅在激活时注入）
     if plan_mode:
         dynamic_parts.append(
@@ -293,3 +307,27 @@ async def build_system_prompt(
 
     parts.append("\n\n".join(dynamic_parts))
     return "\n".join(parts)
+
+
+def _requires_web_search_context(context: str) -> bool:
+    lowered = context.lower()
+    terms = (
+        "天气",
+        "气温",
+        "预报",
+        "新闻",
+        "最新",
+        "今天",
+        "明天",
+        "实时",
+        "当前",
+        "weather",
+        "forecast",
+        "news",
+        "latest",
+        "today",
+        "tomorrow",
+        "current",
+        "price",
+    )
+    return any(term in lowered for term in terms)

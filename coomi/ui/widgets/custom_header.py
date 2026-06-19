@@ -26,14 +26,18 @@ class CustomHeader(Widget):
     """
 
     TITLE = " Coomi Agent"
+    HOME = "Home"
     SETTING = "Setting "
     TITLE_PATH_GAP = 2
     PATH_SETTING_GAP = 3
+    HOME_SETTING_GAP = 2
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._path_start = 0
         self._path_end = 0
+        self._home_start = 0
+        self._home_end = 0
         self._setting_start = 0
         self._display_path = ""
         self._is_selecting_path = False
@@ -43,12 +47,14 @@ class CustomHeader(Widget):
     def render(self) -> Text:
         width = max(0, self.size.width)
         title = self.TITLE
+        home = self.HOME
         setting = self.SETTING
+        nav_width = len(home) + self.HOME_SETTING_GAP + len(setting)
 
-        if width <= len(setting) + 2:
+        if width <= nav_width + 2:
             title = ""
-        elif width < len(title) + len(setting) + 1:
-            title = title[:max(0, width - len(setting) - 1)]
+        elif width < len(title) + nav_width + 1:
+            title = title[:max(0, width - nav_width - 1)]
 
         path_budget = max(
             0,
@@ -56,7 +62,7 @@ class CustomHeader(Widget):
             - len(title)
             - self.TITLE_PATH_GAP
             - self.PATH_SETTING_GAP
-            - len(setting),
+            - nav_width,
         )
         full_path = self._current_path()
         display_path = _middle_ellipsis(full_path, path_budget)
@@ -64,15 +70,19 @@ class CustomHeader(Widget):
         self._path_start = len(title) + self.TITLE_PATH_GAP
         self._path_end = self._path_start + len(display_path)
         self._setting_start = max(0, width - len(setting))
+        self._home_start = max(0, self._setting_start - self.HOME_SETTING_GAP - len(home))
+        self._home_end = self._home_start + len(home)
         self._display_path = display_path
 
-        between_path_and_setting = max(1, self._setting_start - self._path_end)
+        between_path_and_nav = max(1, self._home_start - self._path_end)
 
         text = Text()
         text.append(title, style="bold cyan")
         text.append(" " * self.TITLE_PATH_GAP)
         self._append_path(text, display_path)
-        text.append(" " * between_path_and_setting)
+        text.append(" " * between_path_and_nav)
+        text.append(home, style="bold cyan")
+        text.append(" " * self.HOME_SETTING_GAP)
         text.append(setting, style="bold cyan")
         return text
 
@@ -103,7 +113,7 @@ class CustomHeader(Widget):
             self.capture_mouse()
             event.stop()
             self.refresh()
-        elif event.x < self._setting_start:
+        elif event.x < self._home_start:
             self.clear_selection()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
@@ -122,7 +132,10 @@ class CustomHeader(Widget):
             self.refresh()
 
     def on_click(self, event: events.Click) -> None:
-        if event.x >= self._setting_start:
+        if self._home_start <= event.x < self._home_end:
+            event.stop()
+            self.app.action_go_home()
+        elif event.x >= self._setting_start:
             event.stop()
             self.app.action_open_settings()
 

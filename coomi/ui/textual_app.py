@@ -222,6 +222,7 @@ class CoomiApp(App):
         Binding("ctrl+c", "copy_selected", "Copy", priority=True, show=False),
         Binding("shift+tab", "cycle_permission_mode", "Permission Mode", priority=True),
         Binding("ctrl+p", "command_palette", "Command Palette"),
+        Binding("f1", "go_home", "Home", priority=True),
         Binding("f2", "open_settings", "Setting", priority=True),
         # 问询模式导航 — priority=True 在 TextArea BINDINGS 之前检查
         Binding("up", "question_up", "↑", priority=True),
@@ -404,6 +405,17 @@ class CoomiApp(App):
                 self._show_command_result("[dim]MCP 安装功能即将推出...[/dim]")
 
         self.push_screen(SettingsScreen(), on_settings_result)
+
+    def action_go_home(self) -> None:
+        """Return to the welcome screen without modifying the current session."""
+        if self._agent_running:
+            self._show_command_result("[dim]Agent 正在运行，完成或取消后可返回 Home。[/dim]")
+            return
+        self._hide_command_list()
+        self._hide_model_picker()
+        self._hide_context_picker()
+        self._set_interactive_mode("none")
+        self._show_welcome_message()
 
     def _open_provider_list(self) -> None:
         """打开 Provider 列表"""
@@ -775,7 +787,7 @@ class CoomiApp(App):
             "  [bold]/compact[/bold]       压缩上下文\n"
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
-            "[dim]快捷键: Ctrl+P 命令面板 | F2 Setting | Ctrl+R 切换推理 | "
+            "[dim]快捷键: Ctrl+P 命令面板 | F1 Home | F2 Setting | Ctrl+R 切换推理 | "
             "Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
         )
         self._show_command_result(help_text)
@@ -894,6 +906,12 @@ class CoomiApp(App):
         try:
             panel = self.screen.welcome_panel
             return bool(panel.display and panel.has_sessions())
+        except Exception:
+            return False
+
+    def _is_welcome_visible(self) -> bool:
+        try:
+            return bool(self.screen.welcome_panel.display)
         except Exception:
             return False
 
@@ -1224,16 +1242,8 @@ class CoomiApp(App):
             return
 
         # --- agent execution ---
-        self._session.system_prompt = await build_system_prompt(
-            memory_manager=self._memory_manager,
-            memory_recall=self._memory_recall,
-            current_context=user_input,
-            cwd=self._cwd,
-            model_display=self._display_name,
-            plan_mode=self._plan_mode,
-        )
-
-        self._run_agent(user_input)
+        self._ensure_new_session_for_welcome_input()
+        asyncio.create_task(self._run_agent_async(user_input))
 
     # -- PromptTextArea handling (Enter 发送, Shift+Enter 换行) -------------
 
@@ -1311,20 +1321,26 @@ class CoomiApp(App):
             return
 
         # --- agent execution ---
+        self._ensure_new_session_for_welcome_input()
         import asyncio
         asyncio.create_task(self._run_agent_async(text))
 
     async def _run_agent_async(self, user_input: str) -> None:
         """异步执行 agent"""
-        self._session.system_prompt = await build_system_prompt(
-            memory_manager=self._memory_manager,
-            memory_recall=self._memory_recall,
-            current_context=user_input,
-            cwd=self._cwd,
-            model_display=self._display_name,
-            plan_mode=self._plan_mode,
-        )
         self._run_agent(user_input)
+
+    def _ensure_new_session_for_welcome_input(self) -> None:
+        """Typing on the welcome screen starts a fresh conversation."""
+        if not self._is_welcome_visible():
+            return
+        if self._session and not self._session.messages:
+            return
+        system_prompt = self._session.system_prompt if self._session else "You are a helpful assistant"
+        self._session = self._session_mgr.create_session(
+            system_prompt=system_prompt,
+            cwd=self._cwd,
+            model=self._display_name,
+        )
 
     async def _handle_clear(self) -> None:
         old_id = self._session.id
@@ -1431,6 +1447,15 @@ class CoomiApp(App):
 
                 self._stream_buffer = ""
                 self._full_reasoning = ""
+
+                self._session.system_prompt = await build_system_prompt(
+                    memory_manager=self._memory_manager,
+                    memory_recall=self._memory_recall,
+                    current_context=user_input,
+                    cwd=self._cwd,
+                    model_display=self._display_name,
+                    plan_mode=self._plan_mode,
+                )
 
                 async for event in self._agent.run_stream(self._session, user_input):
                     if self._cancel_requested:
