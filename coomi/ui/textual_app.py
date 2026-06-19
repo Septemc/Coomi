@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from rich.markdown import Markdown
+from rich.text import Text
 from textual import events
 from textual import work
 from textual.app import App
@@ -28,6 +29,7 @@ from .widgets.custom_header import CustomHeader
 
 from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
+from ..services.session_history import list_session_records, load_session_from_jsonl
 from ..services.llm.factory import get_config_manager
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
 from ..services.memory.extractor import MemoryExtractor
@@ -310,8 +312,9 @@ class CoomiApp(App):
         """显示欢迎消息（在屏幕准备好后调用）"""
         try:
             tool_count = len(self._tool_registry.list_tools())
+            sessions = list_session_records(limit=8)
             if hasattr(self.screen, "update_welcome_panel"):
-                self.screen.update_welcome_panel(self._display_name, tool_count)
+                self.screen.update_welcome_panel(self._display_name, tool_count, sessions)
                 self.screen.show_welcome_panel()
         except Exception:
             pass
@@ -367,7 +370,11 @@ class CoomiApp(App):
             cwd=self._cwd,
             model_display=self._display_name,
         )
-        self._session = self._session_mgr.create_session(system_prompt=system_prompt)
+        self._session = self._session_mgr.create_session(
+            system_prompt=system_prompt,
+            cwd=self._cwd,
+            model=self._display_name,
+        )
 
         # Wait for screen to be ready before querying widgets
         self.call_after_refresh(self._show_welcome_message)
@@ -453,6 +460,48 @@ class CoomiApp(App):
             self._wl(log, result)
         except Exception:
             pass
+
+    def open_session_from_history(self, path: str) -> None:
+        """Load a JSONL session selected from the welcome screen."""
+        try:
+            session = load_session_from_jsonl(path)
+        except Exception as exc:
+            self._show_command_result(f"[red]Failed to load session:[/red] {exc}")
+            return
+
+        self._session = session
+        self._session_mgr.register_session(session)
+        self.status_line.cumulative_usage.input_tokens = 0
+        self.status_line.cumulative_usage.output_tokens = 0
+        self.status_line.cumulative_usage.total_tokens = 0
+
+        try:
+            log = self.screen.query_one("#message-log", RichLog)
+            log.clear()
+            self._render_loaded_session(log, session)
+            self.screen.hide_welcome_panel()
+        except Exception:
+            pass
+
+    def _render_loaded_session(self, log: RichLog, session: Session) -> None:
+        if not session.messages:
+            log.write("[dim]Loaded empty session.[/dim]")
+            return
+
+        for message in session.messages:
+            if message.role == "user":
+                log.write(f"\n[bold cyan]You:[/bold cyan] {message.content or ''}")
+            elif message.role == "assistant":
+                if message.content:
+                    log.write(Markdown(message.content))
+                elif message.tool_calls:
+                    names = ", ".join(tool_call.name for tool_call in message.tool_calls)
+                    log.write(f"[dim]Assistant requested tools: {names}[/dim]")
+            elif message.role == "tool":
+                preview = (message.content or "").strip().replace("\n", " ")
+                if len(preview) > 180:
+                    preview = preview[:177] + "..."
+                log.write(Text(f"Tool result: {preview}", style="dim"))
 
     def _refresh_status_panel(self) -> None:
         try:
@@ -771,6 +820,10 @@ class CoomiApp(App):
                 return True
             return None
 
+        if mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            if action in ("question_up", "question_down", "question_confirm"):
+                return True
+
         # 问询模式
         if mode == "question":
             # Other 选中且无内容时，阻止左右键切换问题
@@ -786,7 +839,9 @@ class CoomiApp(App):
         return None
 
     async def action_question_up(self) -> None:
-        if self._interactive_mode == "command" and self._command_list:
+        if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            self.screen.welcome_panel.move_session_selection(-1)
+        elif self._interactive_mode == "command" and self._command_list:
             self._command_list.move_up()
         elif self._interactive_mode == "question" and self._plan_panel:
             self._plan_panel.move_up()
@@ -796,7 +851,9 @@ class CoomiApp(App):
             self._context_picker.move_up()
 
     async def action_question_down(self) -> None:
-        if self._interactive_mode == "command" and self._command_list:
+        if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            self.screen.welcome_panel.move_session_selection(1)
+        elif self._interactive_mode == "command" and self._command_list:
             self._command_list.move_down()
         elif self._interactive_mode == "question" and self._plan_panel:
             self._plan_panel.move_down()
@@ -831,7 +888,18 @@ class CoomiApp(App):
         except Exception:
             pass
 
+    def _welcome_panel_active(self) -> bool:
+        try:
+            panel = self.screen.welcome_panel
+            return bool(panel.display and panel.has_sessions())
+        except Exception:
+            return False
+
     async def action_question_confirm(self) -> None:
+        if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            self.screen.welcome_panel.open_selected_session()
+            return
+
         # 指令模式 → 执行选中指令
         if self._interactive_mode == "command" and self._command_list:
             cmd = self._command_list.get_selected_command()
@@ -1265,7 +1333,11 @@ class CoomiApp(App):
             cwd=self._cwd,
             model_display=self._display_name,
         )
-        self._session = self._session_mgr.create_session(system_prompt=system_prompt)
+        self._session = self._session_mgr.create_session(
+            system_prompt=system_prompt,
+            cwd=self._cwd,
+            model=self._display_name,
+        )
         self._session_mgr.delete_session(old_id)
         self.status_line.cumulative_usage.input_tokens = 0
         self.status_line.cumulative_usage.output_tokens = 0

@@ -36,8 +36,8 @@ def _create_from_config(config: ProviderConfig) -> LLMProvider:
     t = config.type.lower()
 
     if t == "deepseek":
-        from .deepseek import DeepSeekProvider
-        return DeepSeekProvider(config)
+        from .generic import GenericOpenAIProvider
+        return GenericOpenAIProvider(config)
     elif t == "openai":
         from .openai import OpenAIProvider
         return OpenAIProvider(config)

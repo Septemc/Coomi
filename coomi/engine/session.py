@@ -5,8 +5,10 @@ import os
 import platform
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..services.session_history import append_message, create_session_file
 from ..services.memory.manager import MemoryManager
 from ..types import Message, Session, ToolCall
 
@@ -122,8 +124,10 @@ class SessionManager:
 
     MAX_SESSIONS = 50
 
-    def __init__(self):
+    def __init__(self, history_dir: str | Path | None = None, persist_history: bool = True):
         self._sessions: dict[str, Session] = {}
+        self._history_dir = Path(history_dir) if history_dir is not None else None
+        self._persist_history = persist_history
 
     def _evict_oldest(self) -> None:
         """驱逐最旧的会话，确保不超过上限"""
@@ -132,7 +136,12 @@ class SessionManager:
         oldest = min(self._sessions.values(), key=lambda s: s.created_at)
         del self._sessions[oldest.id]
 
-    def create_session(self, system_prompt: str = "You are a helpful assistant") -> Session:
+    def create_session(
+        self,
+        system_prompt: str = "You are a helpful assistant",
+        cwd: str | None = None,
+        model: str = "",
+    ) -> Session:
         """创建新会话"""
         self._evict_oldest()
         session = Session(
@@ -140,8 +149,15 @@ class SessionManager:
             system_prompt=system_prompt,
             created_at=datetime.now(),
         )
+        if self._persist_history:
+            create_session_file(session, self._history_dir, cwd=cwd, model=model)
         self._sessions[session.id] = session
         return session
+
+    def register_session(self, session: Session) -> None:
+        """注册已加载的历史会话。"""
+        self._evict_oldest()
+        self._sessions[session.id] = session
 
     def get_session(self, session_id: str) -> Session | None:
         """获取会话"""
@@ -161,7 +177,9 @@ class SessionManager:
 
 def add_user_message(session: Session, content: str) -> None:
     """添加用户消息"""
-    session.messages.append(Message(role="user", content=content))
+    message = Message(role="user", content=content)
+    session.messages.append(message)
+    append_message(session, message)
 
 
 def add_assistant_message(
@@ -171,16 +189,21 @@ def add_assistant_message(
     reasoning_content: str | None = None,
 ) -> None:
     """添加助手消息"""
-    session.messages.append(
-        Message(role="assistant", content=content, tool_calls=tool_calls, reasoning_content=reasoning_content)
+    message = Message(
+        role="assistant",
+        content=content,
+        tool_calls=tool_calls,
+        reasoning_content=reasoning_content,
     )
+    session.messages.append(message)
+    append_message(session, message)
 
 
 def add_tool_result(session: Session, tool_call_id: str, result: str) -> None:
     """添加工具执行结果"""
-    session.messages.append(
-        Message(role="tool", content=result, tool_call_id=tool_call_id)
-    )
+    message = Message(role="tool", content=result, tool_call_id=tool_call_id)
+    session.messages.append(message)
+    append_message(session, message)
 
 
 def update_token_usage(session: Session, usage: dict[str, int]) -> None:

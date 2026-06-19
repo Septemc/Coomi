@@ -94,8 +94,8 @@ class MainScreen(Screen):
         self.welcome_panel.display = False
         self.message_log.display = True
 
-    def update_welcome_panel(self, model_display: str, tool_count: int) -> None:
-        self.welcome_panel.set_context(model_display, tool_count)
+    def update_welcome_panel(self, model_display: str, tool_count: int, sessions=None) -> None:
+        self.welcome_panel.set_context(model_display, tool_count, sessions=sessions)
 
     def action_copy_selected(self) -> None:
         """复制选中的文本"""

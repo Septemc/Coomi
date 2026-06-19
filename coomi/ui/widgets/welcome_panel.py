@@ -7,7 +7,10 @@ from rich.panel import Panel
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
+from textual import events
 from textual.widget import Widget
+
+from ...services.session_history import SessionHistoryRecord
 
 
 # Extracted from assets/mascot/coomi.png by cropping the non-transparent bounds
@@ -64,12 +67,13 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     "...d....d...",
 )
 
-MASCOT_COMPACT_WIDTH = max(len(row) for row in MASCOT_ROWS_12X13)
-MASCOT_COMPACT_HEIGHT = (len(MASCOT_ROWS_12X13) + 1) // 2
+MASCOT_SOURCE_WIDTH = max(len(row) for row in MASCOT_ROWS_12X13)
+MASCOT_MICRO_WIDTH = (MASCOT_SOURCE_WIDTH + 1) // 2
+MASCOT_MICRO_HEIGHT = (len(MASCOT_ROWS_12X13) + 3) // 4
 
 
 class WelcomePanel(Widget):
-    """Initial guide panel with a terminal-rendered pixel mascot."""
+    """Initial guide panel with a terminal-rendered pixel mascot and session list."""
 
     DEFAULT_CSS = """
     WelcomePanel {
@@ -83,104 +87,187 @@ class WelcomePanel(Widget):
         super().__init__(*args, **kwargs)
         self._model_display = ""
         self._tool_count = 0
+        self._sessions: list[SessionHistoryRecord] = []
+        self._selected_session = 0
+        self._session_scroll = 0
+        self._history_x_start = 0
+        self._history_item_y_start = 0
+        self._history_visible_count = 0
 
-    def set_context(self, model_display: str, tool_count: int) -> None:
+    def set_context(
+        self,
+        model_display: str,
+        tool_count: int,
+        sessions: list[SessionHistoryRecord] | None = None,
+    ) -> None:
         self._model_display = model_display
         self._tool_count = tool_count
+        if sessions is not None:
+            self._sessions = sessions
+            self._selected_session = min(self._selected_session, max(0, len(sessions) - 1))
+            self._session_scroll = min(self._session_scroll, self._selected_session)
         self.refresh()
+
+    def has_sessions(self) -> bool:
+        return bool(self._sessions)
+
+    def move_session_selection(self, direction: int) -> None:
+        if not self._sessions:
+            return
+        self._selected_session = (self._selected_session + direction) % len(self._sessions)
+        self._keep_selected_visible()
+        self.refresh()
+
+    def open_selected_session(self) -> None:
+        if not self._sessions:
+            return
+        record = self._sessions[self._selected_session]
+        self.app.open_session_from_history(str(record.path))
 
     def render(self):
         width = max(42, self.size.width or 80)
-        height = max(14, self.size.height or 24)
-        if width >= 54:
-            return self._render_speech_layout(width, height)
+        height = max(12, self.size.height or 24)
+        if width >= 74:
+            return self._render_split_layout(width, height)
         return self._render_stacked_layout(width, height)
 
-    def _render_speech_layout(self, width: int, height: int) -> Group:
-        bubble_width = min(58, max(32, width - MASCOT_COMPACT_WIDTH - 8))
-        group_width = MASCOT_COMPACT_WIDTH + 2 + bubble_width
-        left_pad = max(2, (width - group_width) // 2)
-        mascot_offset = 2 if height >= 22 else 1
-        group_height = max(
-            MASCOT_COMPACT_HEIGHT + mascot_offset,
-            self._bubble_line_count(bubble_width),
-        )
-        spacer_lines = max(1, (height - group_height) // 2)
+    def _render_split_layout(self, width: int, height: int) -> Table:
+        history_width = min(42, max(30, width // 3))
+        left_width = max(30, width - history_width - 1)
+        self._history_x_start = left_width + 1
+        self._history_item_y_start = 3
 
-        row = Table.grid(expand=True)
-        row.add_column(width=left_pad)
-        row.add_column(width=MASCOT_COMPACT_WIDTH)
-        row.add_column(width=2)
-        row.add_column(width=bubble_width)
-        row.add_column(ratio=1)
-        row.add_row(
+        layout = Table.grid(expand=True)
+        layout.add_column(width=left_width)
+        layout.add_column(width=1)
+        layout.add_column(width=history_width)
+        layout.add_row(
+            self._render_left_area(left_width, height),
             "",
-            Group(Text("\n" * mascot_offset), Align.left(render_pixel_mascot())),
-            "",
-            self._render_bubble(bubble_width),
-            "",
+            self._render_history_panel(history_width, height),
         )
-        return Group(Text("\n" * spacer_lines), row)
+        return layout
 
     def _render_stacked_layout(self, width: int, height: int) -> Group:
-        bubble_width = max(34, width - 6)
+        left_height = max(8, height // 2)
+        history_height = max(8, height - left_height - 1)
+        self._history_x_start = 0
+        self._history_item_y_start = left_height + 4
+        return Group(
+            self._render_left_area(width, left_height),
+            Text("\n"),
+            self._render_history_panel(width, history_height),
+        )
+
+    def _render_left_area(self, width: int, height: int) -> Group:
+        bubble_width = min(48, max(28, width - MASCOT_MICRO_WIDTH - 5))
+        bubble = self._render_bubble(bubble_width)
         bubble_lines = self._bubble_line_count(bubble_width)
-        group_height = bubble_lines + 1 + MASCOT_COMPACT_HEIGHT
-        spacer_lines = max(0, height - group_height - 1)
+        mascot_offset = max(1, bubble_lines - MASCOT_MICRO_HEIGHT - 1)
+        cluster_height = max(bubble_lines, mascot_offset + MASCOT_MICRO_HEIGHT)
+        top_pad = max(0, height - cluster_height - 1)
 
-        bubble_row = Table.grid(expand=True)
-        bubble_row.add_column(ratio=1)
-        bubble_row.add_column(width=bubble_width)
-        bubble_row.add_column(ratio=1)
-        bubble_row.add_row("", self._render_bubble(bubble_width), "")
-
-        mascot_row = Table.grid(expand=True)
-        mascot_row.add_column(width=2)
-        mascot_row.add_column(width=MASCOT_COMPACT_WIDTH)
-        mascot_row.add_column(ratio=1)
-        mascot_row.add_row("", Align.left(render_pixel_mascot()), "")
-        return Group(Text("\n" * spacer_lines), bubble_row, Text("\n"), mascot_row)
+        row = Table.grid(expand=False)
+        row.add_column(width=MASCOT_MICRO_WIDTH)
+        row.add_column(width=2)
+        row.add_column(width=bubble_width)
+        row.add_row(
+            Group(Text("\n" * mascot_offset), Align.left(render_pixel_mascot())),
+            "",
+            bubble,
+        )
+        return Group(Text("\n" * top_pad), row)
 
     def _bubble_line_count(self, width: int) -> int:
-        # Border + vertical padding + content lines.
-        return 8 if width < 50 else 10
+        return 7 if width < 42 else 8
 
     def _render_bubble(self, width: int) -> Panel:
         model = self._model_display or "model pending"
         tools = f"{self._tool_count} tools" if self._tool_count else "tools loading"
         guide = Text()
-        guide.append("准备就绪\n", style="bold cyan")
-        guide.append(f"{model} · {tools}\n\n", style="dim")
-        if width < 50:
+        guide.append("操作指南\n", style="bold cyan")
+        guide.append(f"{model} · {tools}\n", style="dim")
+        if width < 42:
             guide.append("Enter 发送，Shift+Enter 换行。\n")
             guide.append("/model 模型，/context 上下文。\n")
-            guide.append("Shift+Tab 权限，Ctrl+P 命令。\n")
-            guide.append("双击 Esc 退出。", style="dim")
+            guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
         else:
             guide.append("Enter 发送消息，Shift+Enter 换行。\n")
-            guide.append("/model 切换模型，/context 调整上下文窗口。\n")
-            guide.append("Shift+Tab 切换工具权限模式。\n")
-            guide.append("Ctrl+P 打开命令面板，Ctrl+C 复制选中文本。\n")
+            guide.append("/model 切换模型，/context 调整上下文。\n")
+            guide.append("Shift+Tab 切换权限，Ctrl+P 命令面板。\n")
             guide.append("双击 Esc 退出应用。", style="dim")
         return Panel(
             guide,
             width=width,
-            padding=(1, 2),
+            padding=(0, 1),
             border_style="#00a8df",
-            title="操作指南",
-            title_align="left",
         )
+
+    def _render_history_panel(self, width: int, height: int) -> Panel:
+        content_height = max(4, height - 2)
+        visible_count = max(1, content_height - 4)
+        self._keep_selected_visible(visible_count)
+        records = self._sessions[self._session_scroll : self._session_scroll + visible_count]
+        self._history_visible_count = len(records)
+
+        rows: list[Text] = [Text(" Sessions", style="bold cyan"), Text("")]
+        if not records:
+            rows.append(Text("  暂无历史会话", style="dim"))
+        else:
+            for index, record in enumerate(records):
+                absolute_index = self._session_scroll + index
+                rows.append(self._render_session_row(record, absolute_index, max(10, width - 4)))
+
+        used_rows = len(rows) + 2
+        spacer = max(0, content_height - used_rows)
+        rows.extend(Text("") for _ in range(spacer))
+        rows.append(Text(" 鼠标/上下键进行选择", style="dim"))
+        rows.append(Text(" 点击/Enter选中会话", style="dim"))
+
+        return Panel(
+            Group(*rows),
+            width=width,
+            height=height,
+            border_style="#30363d",
+            padding=(0, 1),
+        )
+
+    def _render_session_row(self, record: SessionHistoryRecord, index: int, width: int) -> Text:
+        title_budget = max(8, width - 13)
+        title = _truncate(record.title, title_budget)
+        date = record.updated_at.strftime("%m-%d %H:%M") if record.updated_at else "-- -- --:--"
+        line = f" {date}  {title}"
+        if index == self._selected_session:
+            return Text(line.ljust(width), style="bold white on #264f78")
+        return Text(line.ljust(width), style="white")
+
+    def on_click(self, event: events.Click) -> None:
+        if event.x < self._history_x_start:
+            return
+        index = event.y - self._history_item_y_start
+        if 0 <= index < self._history_visible_count:
+            self._selected_session = self._session_scroll + index
+            self.refresh()
+            self.open_selected_session()
+            event.stop()
+
+    def _keep_selected_visible(self, visible_count: int | None = None) -> None:
+        visible_count = visible_count or max(1, self._history_visible_count)
+        if self._selected_session < self._session_scroll:
+            self._session_scroll = self._selected_session
+        elif self._selected_session >= self._session_scroll + visible_count:
+            self._session_scroll = self._selected_session - visible_count + 1
+        max_scroll = max(0, len(self._sessions) - visible_count)
+        self._session_scroll = max(0, min(self._session_scroll, max_scroll))
 
 
 def render_pixel_mascot() -> Text:
-    """Render the mascot as compact half-height terminal pixels."""
+    """Render the mascot as very small half-height terminal pixels."""
     text = Text()
-    for row_index in range(0, len(MASCOT_ROWS_12X13), 2):
-        top = MASCOT_ROWS_12X13[row_index]
-        bottom = MASCOT_ROWS_12X13[row_index + 1] if row_index + 1 < len(MASCOT_ROWS_12X13) else ""
-        for column in range(MASCOT_COMPACT_WIDTH):
-            top_color = MASCOT_PALETTE.get(top[column]) if column < len(top) else None
-            bottom_color = MASCOT_PALETTE.get(bottom[column]) if column < len(bottom) else None
+    for row_index in range(0, len(MASCOT_ROWS_12X13), 4):
+        for column in range(0, MASCOT_SOURCE_WIDTH, 2):
+            top_color = _dominant_color(row_index, column, row_span=2, col_span=2)
+            bottom_color = _dominant_color(row_index + 2, column, row_span=2, col_span=2)
             if top_color and bottom_color:
                 text.append("▀", style=Style(color=top_color, bgcolor=bottom_color))
             elif top_color:
@@ -189,6 +276,27 @@ def render_pixel_mascot() -> Text:
                 text.append("▄", style=Style(color=bottom_color))
             else:
                 text.append(" ")
-        if row_index + 2 < len(MASCOT_ROWS_12X13):
+        if row_index + 4 < len(MASCOT_ROWS_12X13):
             text.append("\n")
     return text
+
+
+def _dominant_color(row_start: int, col_start: int, row_span: int, col_span: int) -> str | None:
+    counts: dict[str, int] = {}
+    for row_index in range(row_start, min(row_start + row_span, len(MASCOT_ROWS_12X13))):
+        row = MASCOT_ROWS_12X13[row_index]
+        for column in range(col_start, min(col_start + col_span, len(row))):
+            color = MASCOT_PALETTE.get(row[column])
+            if color:
+                counts[color] = counts.get(color, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
+def _truncate(value: str, max_width: int) -> str:
+    if len(value) <= max_width:
+        return value
+    if max_width <= 3:
+        return "." * max_width
+    return value[: max_width - 3] + "..."

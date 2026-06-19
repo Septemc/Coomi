@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from rich.console import Console
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 
 console = Console()
 
@@ -28,7 +28,7 @@ ENV_MAPPINGS = {
 
 PROVIDER_TEMPLATES = {
     "deepseek": {
-        "type": "deepseek",
+        "type": "generic",
         "display": "DeepSeek V4",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-v4-pro",
@@ -141,19 +141,18 @@ def run_first_time_setup() -> bool:
 
     # 选择 Provider 类型
     console.print("[bold]支持的 Provider 类型：[/bold]")
-    console.print("  1. [cyan]DeepSeek[/cyan] — 推荐，性价比高")
+    console.print("  1. [cyan]Generic[/cyan] — 任意兼容 OpenAI API 的服务（DeepSeek/MiMo/MiniMax 等）")
     console.print("  2. [cyan]OpenAI[/cyan] — GPT-4o 等")
     console.print("  3. [cyan]Anthropic[/cyan] — Claude 系列")
-    console.print("  4. [cyan]Generic[/cyan] — 任意兼容 OpenAI API 的服务")
     console.print()
 
     choice = Prompt.ask(
         "请选择 Provider 类型",
-        choices=["1", "2", "3", "4"],
+        choices=["1", "2", "3"],
         default="1"
     )
 
-    provider_map = {"1": "deepseek", "2": "openai", "3": "anthropic", "4": "generic"}
+    provider_map = {"1": "generic", "2": "openai", "3": "anthropic"}
     provider_type = provider_map[choice]
     template = PROVIDER_TEMPLATES[provider_type].copy()
 
@@ -175,12 +174,6 @@ def run_first_time_setup() -> bool:
         template["base_url"] = base_url
         template["model"] = model
         template["display"] = model
-
-    # DeepSeek 可选 fast_model
-    if provider_type == "deepseek":
-        use_fast = Confirm.ask("是否配置快速模型 (deepseek-v4-flash)？", default=True)
-        if not use_fast:
-            template.pop("fast_model", None)
 
     # 构建配置
     template["api_key"] = api_key.strip()

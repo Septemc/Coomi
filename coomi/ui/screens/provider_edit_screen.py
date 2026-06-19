@@ -15,8 +15,8 @@ from textual import on
 from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS
 
 FIELD_DEFS = [
-    ("id", "Provider ID", "唯一标识，如 my-deepseek"),
-    ("type", "类型 (deepseek/openai/anthropic/generic)", "deepseek"),
+    ("id", "Provider ID", "唯一标识，如 my-provider"),
+    ("type", "类型 (generic/openai/anthropic)", "generic"),
     ("display", "显示名称", "如 DeepSeek V4"),
     ("api_key", "API Key", "sk-xxx"),
     ("base_url", "Base URL", "https://api.deepseek.com"),
@@ -59,7 +59,7 @@ class ProviderEditScreen(ModalScreen[bool]):
         else:
             self._init_values = {
                 "id": "",
-                "type": "deepseek",
+                "type": "generic",
                 "display": "",
                 "api_key": "",
                 "base_url": "",
@@ -145,10 +145,16 @@ class ProviderEditScreen(ModalScreen[bool]):
         if not values.get("model"):
             self.app._show_command_result("[red]模型名不能为空[/red]")
             return
+        provider_type = (values.get("type") or "generic").lower()
+        if provider_type == "deepseek":
+            provider_type = "generic"
+        if provider_type not in {"generic", "openai", "anthropic"}:
+            self.app._show_command_result("[red]类型只能是 generic / openai / anthropic[/red]")
+            return
 
         config = ProviderConfig(
             id=values["id"],
-            type=values.get("type", "generic") or "generic",
+            type=provider_type,
             display=values.get("display") or values["id"],
             api_key=values["api_key"],
             model=values["model"],

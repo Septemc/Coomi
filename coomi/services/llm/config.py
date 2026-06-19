@@ -43,7 +43,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
 class ProviderConfig:
     """单个 Provider 配置"""
     id: str
-    type: str  # deepseek / openai / anthropic / generic
+    type: str  # generic / openai / anthropic; deepseek is accepted as a legacy alias
     display: str
     api_key: str
     model: str
@@ -52,9 +52,12 @@ class ProviderConfig:
 
     @classmethod
     def from_dict(cls, provider_id: str, data: dict) -> ProviderConfig:
+        provider_type = str(data.get("type", "generic")).lower()
+        if provider_type == "deepseek":
+            provider_type = "generic"
         return cls(
             id=provider_id,
-            type=data.get("type", "generic"),
+            type=provider_type,
             display=data.get("display", provider_id),
             api_key=data.get("api_key", ""),
             model=data.get("model", ""),
@@ -107,7 +110,7 @@ class ConfigManager:
         from dotenv import load_dotenv
 
         load_dotenv(Path.cwd() / ".env")  # 不加 override，避免覆盖系统环境变量
-        provider_type = os.getenv("LLM_PROVIDER", "deepseek").lower()
+        provider_type = os.getenv("LLM_PROVIDER", "generic").lower()
 
         if provider_type == "deepseek":
             data = {
@@ -115,7 +118,7 @@ class ConfigManager:
                 "active": "default",
                 "providers": {
                     "default": {
-                        "type": "deepseek",
+                        "type": "generic",
                         "display": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
                         "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
                         "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
