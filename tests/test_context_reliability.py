@@ -13,8 +13,10 @@ from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
 from coomi.services.llm.generic import ThinkingTagFilter, _strip_thinking_tags
 from coomi.services.llm.provider import LLMProvider
+from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry
+from coomi.ui.events import TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
 
@@ -54,6 +56,20 @@ class WriteCountingTool(CountingTool):
     concurrency = ToolConcurrency.BLOCKING
 
 
+class WebSearchCountingTool(CountingTool):
+    name = "WebSearch"
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "freshness": {"type": "string"},
+            },
+            "required": ["query"],
+        }
+
+
 class ParseErrorProvider(LLMProvider):
     def __init__(self):
         self.calls = 0
@@ -76,6 +92,38 @@ class ParseErrorProvider(LLMProvider):
                     "raw_arguments": "{",
                     "parse_error": "Expecting property name",
                 },
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+
+class TextToolCallProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "content",
+                "content": "I will search. <tool_call> <function=web_",
+            }
+            yield {
+                "type": "content",
+                "content": "search> <parameter=query>coomi software project "
+                "<parameter=freshness>all </tool_call>",
             }
         else:
             yield {"type": "content", "content": "done"}
@@ -254,6 +302,68 @@ async def test_agent_loop_turns_invalid_tool_json_into_tool_result(tmp_path: Pat
     assistant_tool_calls = [msg for msg in payload if msg.get("tool_calls")]
     assert assistant_tool_calls
     assert any(msg["role"] == "tool" and msg["tool_call_id"] == "bad_json" for msg in payload)
+
+
+def test_text_tool_call_filter_parses_xml_style_tool_calls():
+    stream_filter = TextToolCallFilter()
+    visible_1, calls_1 = stream_filter.feed(
+        "I will search <tool_call> <function=web_"
+    )
+    visible_2, calls_2 = stream_filter.feed(
+        "search> <parameter=query>coomi software project "
+        "<parameter=freshness>all </tool_call> after"
+    )
+
+    assert visible_1 == "I will search "
+    assert calls_1 == []
+    assert visible_2 == " after"
+    assert len(calls_2) == 1
+    assert calls_2[0]["name"] == "web_search"
+    assert calls_2[0]["arguments"] == {
+        "query": "coomi software project",
+        "freshness": "all",
+    }
+
+    bash_call = parse_text_tool_call(
+        "<tool_call> <function=bash> <parameter=command>dir /a "
+        "<parameter=description>List files </tool_call>"
+    )
+    assert bash_call is not None
+    assert bash_call["name"] == "bash"
+    assert bash_call["arguments"]["command"] == "dir /a"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_text_tool_call_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = WebSearchCountingTool(output="search result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.APPROVE_FOR_ME)
+    agent = AgentLoop(
+        TextToolCallProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=permissions,
+    )
+
+    events = [event async for event in agent.run_stream(session, "你知道 coomi 吗")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_call>" not in visible_text
+    assert "<function=" not in visible_text
+    assert tool.calls == 1
+
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls
+    assert assistant_tool_calls[0].name == "WebSearch"
+    assert assistant_tool_calls[0].arguments["query"] == "coomi software project"
+    assert any(msg.role == "tool" and msg.content == "search result" for msg in session.messages)
 
 
 def test_loop_step_requires_explicit_completion_marker():

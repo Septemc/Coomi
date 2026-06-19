@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from ...types import LLMResponse, ToolCall
 from .config import ProviderConfig
 from .provider import LLMProvider
+from .text_tool_calls import strip_text_tool_calls
 
 
 class GenericOpenAIProvider(LLMProvider):
@@ -100,6 +101,7 @@ class GenericOpenAIProvider(LLMProvider):
         content, tag_reasoning = _strip_thinking_tags(content)
         if tag_reasoning:
             reasoning_content = ((reasoning_content or "") + tag_reasoning).strip()
+        content, text_tool_calls = strip_text_tool_calls(content)
         tool_calls = None
         if choice.message.tool_calls:
             tool_calls = []
@@ -118,6 +120,19 @@ class GenericOpenAIProvider(LLMProvider):
                         arguments=arguments,
                         raw_arguments=raw_arguments,
                         parse_error=parse_error,
+                    )
+                )
+        if text_tool_calls:
+            if tool_calls is None:
+                tool_calls = []
+            for tc in text_tool_calls:
+                tool_calls.append(
+                    ToolCall(
+                        id=tc["id"],
+                        name=tc["name"],
+                        arguments=tc["arguments"],
+                        raw_arguments=tc.get("raw_arguments"),
+                        parse_error=tc.get("parse_error"),
                     )
                 )
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from .base import BaseTool, ToolResult
@@ -20,7 +21,20 @@ class ToolRegistry:
 
     def get(self, name: str) -> BaseTool | None:
         """获取工具"""
-        return self._tools.get(name)
+        canonical = self.canonical_name(name)
+        if canonical:
+            return self._tools.get(canonical)
+        return None
+
+    def canonical_name(self, name: str) -> str | None:
+        """Return the registered tool name for exact, case, or snake_case aliases."""
+        if name in self._tools:
+            return name
+        normalized = _normalize_tool_name(name)
+        for tool_name in self._tools:
+            if _normalize_tool_name(tool_name) == normalized:
+                return tool_name
+        return None
 
     def list_tools(self) -> list[BaseTool]:
         """列出所有工具"""
@@ -103,3 +117,7 @@ def create_default_registry() -> ToolRegistry:
     registry.register(ConfigTool())
 
     return registry
+
+
+def _normalize_tool_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").casefold())

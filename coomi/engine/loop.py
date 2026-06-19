@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator
 from ..security import HookSystem, PermissionLevel, PermissionSystem
 from ..services.context.compressor import ContextCompressor
 from ..services.llm.provider import LLMProvider
+from ..services.llm.text_tool_calls import TextToolCallFilter
 from ..tools.base import ToolConcurrency
 from ..tools.registry import ToolRegistry
 from ..types import ToolCall
@@ -279,8 +280,11 @@ class AgentLoop:
             return False
         if tool.concurrency != ToolConcurrency.PARALLEL:
             return False
-        permission = self.permission_system.check_permission(tool_call.name, tool_call.arguments)
+        permission = self.permission_system.check_permission(tool.name, tool_call.arguments)
         return permission == PermissionLevel.AUTO
+
+    def _canonical_tool_name(self, name: str) -> str:
+        return self.tool_registry.canonical_name(name) or name
 
     async def _check_compress(self, session: Session) -> CompressionEvent | None:
         """检查是否需要压缩，需要时执行并返回事件"""
@@ -394,6 +398,7 @@ class AgentLoop:
             full_content = ""
             full_reasoning = ""
             tool_calls_data = []
+            text_tool_filter = TextToolCallFilter()
 
             # ---- LLM API 调用（含降级处理） ----
             try:
@@ -407,10 +412,16 @@ class AgentLoop:
                         full_reasoning += chunk["content"]
                         yield ReasoningChunk(content=chunk["content"])
                     elif chunk["type"] == "tool_call_start":
-                        yield ToolStart(tool_name=chunk["tool_name"], arguments={})
+                        yield ToolStart(
+                            tool_name=self._canonical_tool_name(chunk["tool_name"]),
+                            arguments={},
+                        )
                     elif chunk["type"] == "content":
-                        full_content += chunk["content"]
-                        yield TextChunk(content=chunk["content"])
+                        visible_content, parsed_text_calls = text_tool_filter.feed(chunk["content"])
+                        tool_calls_data.extend(parsed_text_calls)
+                        if visible_content:
+                            full_content += visible_content
+                            yield TextChunk(content=visible_content)
                     elif chunk["type"] == "tool_call":
                         tool_calls_data.append(chunk["data"])
                     elif chunk["type"] == "usage":
@@ -438,11 +449,17 @@ class AgentLoop:
                 )
                 return  # 正常结束当前 run，不抛异常
 
+            tail_content, parsed_text_calls = text_tool_filter.flush()
+            tool_calls_data.extend(parsed_text_calls)
+            if tail_content:
+                full_content += tail_content
+                yield TextChunk(content=tail_content)
+
             if tool_calls_data:
                 tool_calls = [
                     ToolCall(
                         id=tc["id"] or f"call_{i}_{id(tc)}",
-                        name=tc["name"],
+                        name=self._canonical_tool_name(tc["name"]),
                         arguments=tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
                         raw_arguments=tc.get("raw_arguments"),
                         parse_error=tc.get("parse_error"),

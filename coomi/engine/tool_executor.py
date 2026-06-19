@@ -6,6 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,9 @@ class ToolExecutor:
 
     async def execute(self, session: Session, tool_call: ToolCall) -> ToolExecutionOutcome:
         start = time.perf_counter()
+        canonical_name = self.tool_registry.canonical_name(tool_call.name)
+        if canonical_name and canonical_name != tool_call.name:
+            tool_call = replace(tool_call, name=canonical_name)
 
         if tool_call.parse_error:
             return self._outcome(
