@@ -56,13 +56,16 @@ MASCOT_ROWS_12X13: tuple[str, ...] = (
     "adddddddddda",
     "addxddddxdda",
     "adzzddddzzda",
-    ".addddddddda.",
+    ".adddddddda.",
     "..d.d..d.d..",
     "..d.d..d.d..",
     ".d..d..d..d.",
     "...d....d...",
     "...d....d...",
 )
+
+MASCOT_COMPACT_WIDTH = max(len(row) for row in MASCOT_ROWS_12X13)
+MASCOT_COMPACT_HEIGHT = (len(MASCOT_ROWS_12X13) + 1) // 2
 
 
 class WelcomePanel(Widget):
@@ -89,24 +92,24 @@ class WelcomePanel(Widget):
     def render(self):
         width = max(42, self.size.width or 80)
         height = max(14, self.size.height or 24)
-        if width >= 64:
+        if width >= 54:
             return self._render_speech_layout(width, height)
         return self._render_stacked_layout(width, height)
 
     def _render_speech_layout(self, width: int, height: int) -> Group:
-        bubble_width = min(58, max(34, width - 32))
-        group_width = 24 + 2 + bubble_width
+        bubble_width = min(58, max(32, width - MASCOT_COMPACT_WIDTH - 8))
+        group_width = MASCOT_COMPACT_WIDTH + 2 + bubble_width
         left_pad = max(2, (width - group_width) // 2)
-        mascot_offset = 2 if height >= 24 else 1
+        mascot_offset = 2 if height >= 22 else 1
         group_height = max(
-            len(MASCOT_ROWS_12X13) + mascot_offset,
+            MASCOT_COMPACT_HEIGHT + mascot_offset,
             self._bubble_line_count(bubble_width),
         )
         spacer_lines = max(1, (height - group_height) // 2)
 
         row = Table.grid(expand=True)
         row.add_column(width=left_pad)
-        row.add_column(width=24)
+        row.add_column(width=MASCOT_COMPACT_WIDTH)
         row.add_column(width=2)
         row.add_column(width=bubble_width)
         row.add_column(ratio=1)
@@ -122,7 +125,7 @@ class WelcomePanel(Widget):
     def _render_stacked_layout(self, width: int, height: int) -> Group:
         bubble_width = max(34, width - 6)
         bubble_lines = self._bubble_line_count(bubble_width)
-        group_height = bubble_lines + 1 + len(MASCOT_ROWS_12X13)
+        group_height = bubble_lines + 1 + MASCOT_COMPACT_HEIGHT
         spacer_lines = max(0, height - group_height - 1)
 
         bubble_row = Table.grid(expand=True)
@@ -133,7 +136,7 @@ class WelcomePanel(Widget):
 
         mascot_row = Table.grid(expand=True)
         mascot_row.add_column(width=2)
-        mascot_row.add_column(width=24)
+        mascot_row.add_column(width=MASCOT_COMPACT_WIDTH)
         mascot_row.add_column(ratio=1)
         mascot_row.add_row("", Align.left(render_pixel_mascot()), "")
         return Group(Text("\n" * spacer_lines), bubble_row, Text("\n"), mascot_row)
@@ -170,15 +173,22 @@ class WelcomePanel(Widget):
 
 
 def render_pixel_mascot() -> Text:
-    """Render the 12 x 13 mascot blocks as stable terminal cells."""
+    """Render the mascot as compact half-height terminal pixels."""
     text = Text()
-    for row_index, row in enumerate(MASCOT_ROWS_12X13):
-        for token in row:
-            color = MASCOT_PALETTE.get(token)
-            if color is None:
-                text.append("  ")
+    for row_index in range(0, len(MASCOT_ROWS_12X13), 2):
+        top = MASCOT_ROWS_12X13[row_index]
+        bottom = MASCOT_ROWS_12X13[row_index + 1] if row_index + 1 < len(MASCOT_ROWS_12X13) else ""
+        for column in range(MASCOT_COMPACT_WIDTH):
+            top_color = MASCOT_PALETTE.get(top[column]) if column < len(top) else None
+            bottom_color = MASCOT_PALETTE.get(bottom[column]) if column < len(bottom) else None
+            if top_color and bottom_color:
+                text.append("▀", style=Style(color=top_color, bgcolor=bottom_color))
+            elif top_color:
+                text.append("▀", style=Style(color=top_color))
+            elif bottom_color:
+                text.append("▄", style=Style(color=bottom_color))
             else:
-                text.append("  ", style=Style(bgcolor=color))
-        if row_index < len(MASCOT_ROWS_12X13) - 1:
+                text.append(" ")
+        if row_index + 2 < len(MASCOT_ROWS_12X13):
             text.append("\n")
     return text
