@@ -9,6 +9,40 @@ from .base import BaseTool, ToolResult
 from ..types import ToolCall
 
 
+_TOOL_ALIASES = {
+    "glob": "Glob",
+    "listfiles": "Glob",
+    "findfiles": "Glob",
+    "read": "Read",
+    "readfile": "Read",
+    "openfile": "Read",
+    "cat": "Read",
+    "grep": "Grep",
+    "searchcontent": "Grep",
+    "searchfiles": "Grep",
+    "bash": "Bash",
+    "shell": "Bash",
+    "runcommand": "Bash",
+    "terminal": "Bash",
+    "powershell": "PowerShell",
+    "pwsh": "PowerShell",
+    "websearch": "WebSearch",
+    "searchweb": "WebSearch",
+    "webfetch": "WebFetch",
+    "fetchurl": "WebFetch",
+    "write": "Write",
+    "writefile": "Write",
+    "edit": "Edit",
+    "editfile": "Edit",
+    "todowrite": "TodoWrite",
+    "todo": "TodoWrite",
+    "askuserquestion": "AskUserQuestion",
+    "askuser": "AskUserQuestion",
+    "enterplanmode": "EnterPlanMode",
+    "exitplanmode": "ExitPlanMode",
+}
+
+
 class ToolRegistry:
     """工具注册表 - 管理所有可用工具"""
 
@@ -31,6 +65,9 @@ class ToolRegistry:
         if name in self._tools:
             return name
         normalized = _normalize_tool_name(name)
+        alias = _TOOL_ALIASES.get(normalized)
+        if alias in self._tools:
+            return alias
         for tool_name in self._tools:
             if _normalize_tool_name(tool_name) == normalized:
                 return tool_name

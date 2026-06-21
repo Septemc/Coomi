@@ -56,6 +56,20 @@ class WriteCountingTool(CountingTool):
     concurrency = ToolConcurrency.BLOCKING
 
 
+class GlobCountingTool(CountingTool):
+    name = "Glob"
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["pattern"],
+        }
+
+
 class WebSearchCountingTool(CountingTool):
     name = "WebSearch"
 
@@ -124,6 +138,36 @@ class TextToolCallProvider(LLMProvider):
                 "type": "content",
                 "content": "search> <parameter=query>coomi software project "
                 "<parameter=freshness>all </tool_call>",
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+
+class MimoToolCodeProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "content",
+                "content": (
+                    'Let me inspect. <tool_code> glob(pattern="**/*", '
+                    'path="F:\\_WorkSpace\\Projects\\Storyteller-App") </tool_code>'
+                ),
             }
         else:
             yield {"type": "content", "content": "done"}
@@ -333,6 +377,39 @@ def test_text_tool_call_filter_parses_xml_style_tool_calls():
     assert bash_call["arguments"]["command"] == "dir /a"
 
 
+def test_text_tool_call_filter_parses_mimo_tool_code_and_single_tags():
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed(
+        '<tool_code> glob("**", "F:\\_WorkSpace\\Projects\\Storyteller-App") </tool_code>'
+    )
+
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0]["name"] == "glob"
+    assert calls[0]["arguments"] == {
+        "pattern": "**",
+        "path": "F:\\_WorkSpace\\Projects\\Storyteller-App",
+    }
+
+    keyword_call = parse_text_tool_call(
+        '<tool_code> glob(pattern="**/*", path="F:\\_WorkSpace\\Projects\\Storyteller-App") '
+        "</tool_code>"
+    )
+    assert keyword_call is not None
+    assert keyword_call["name"] == "glob"
+    assert keyword_call["arguments"]["pattern"] == "**/*"
+    assert keyword_call["arguments"]["path"] == "F:\\_WorkSpace\\Projects\\Storyteller-App"
+
+    read_call = parse_text_tool_call(
+        "<read_file> F:\\_WorkSpace\\Projects\\Storyteller-App </read_file>"
+    )
+    assert read_call is not None
+    assert read_call["name"] == "read_file"
+    assert read_call["arguments"] == {
+        "file_path": "F:\\_WorkSpace\\Projects\\Storyteller-App"
+    }
+
+
 @pytest.mark.asyncio
 async def test_agent_loop_executes_text_tool_call_without_leaking_markup(tmp_path: Path):
     registry = ToolRegistry()
@@ -364,6 +441,35 @@ async def test_agent_loop_executes_text_tool_call_without_leaking_markup(tmp_pat
     assert assistant_tool_calls[0].name == "WebSearch"
     assert assistant_tool_calls[0].arguments["query"] == "coomi software project"
     assert any(msg.role == "tool" and msg.content == "search result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(MimoToolCodeProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "什么情况")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_code>" not in visible_text
+    assert "glob(" not in visible_text
+    assert tool.calls == 1
+
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls
+    assert assistant_tool_calls[0].name == "Glob"
+    assert assistant_tool_calls[0].arguments == {
+        "pattern": "**/*",
+        "path": "F:\\_WorkSpace\\Projects\\Storyteller-App",
+    }
+    assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
 
 
 def test_loop_step_requires_explicit_completion_marker():
