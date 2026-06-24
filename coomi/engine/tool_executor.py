@@ -177,7 +177,7 @@ class ToolExecutor:
                 "app context is available to request approval."
             )
 
-        description = _summarize_arguments(arguments)
+        description = _summarize_arguments(arguments, tool_name=tool.name)
         answers = await self.app_context._handle_ask_questions(
             [
                 {
@@ -308,11 +308,69 @@ def _matches_json_type(value: Any, expected_type: str | list[str]) -> bool:
     return True
 
 
-def _summarize_arguments(arguments: dict[str, Any], limit: int = 800) -> str:
-    text = repr(arguments)
+def _summarize_arguments(
+    arguments: dict[str, Any],
+    limit: int = 800,
+    tool_name: str = "",
+) -> str:
+    lines = _argument_summary_lines(arguments, tool_name)
+    text = "\n".join(lines) if lines else "(no arguments)"
     if len(text) > limit:
         return text[:limit] + "... [truncated]"
     return text
+
+
+def _argument_summary_lines(arguments: dict[str, Any], tool_name: str) -> list[str]:
+    if tool_name == "AskUserQuestion":
+        questions = arguments.get("questions")
+        if isinstance(questions, list):
+            lines = [f"Questions: {len(questions)}"]
+            for index, question in enumerate(questions[:4], start=1):
+                if not isinstance(question, dict):
+                    continue
+                text = _compact_text(str(question.get("question") or ""), 140)
+                options = question.get("options")
+                option_count = len(options) if isinstance(options, list) else 0
+                multi = " multi-select" if question.get("multiSelect") else ""
+                lines.append(f"Q{index}: {text} ({option_count} options{multi})")
+            return lines
+
+    preferred_keys = (
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "command",
+        "description",
+        "prompt",
+    )
+    lines: list[str] = []
+    for key in preferred_keys:
+        if key in arguments:
+            lines.append(f"{key}: {_compact_text(str(arguments[key]), 220)}")
+
+    if lines:
+        return lines
+
+    for key, value in list(arguments.items())[:8]:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            rendered = str(value)
+        elif isinstance(value, list):
+            rendered = f"{len(value)} item(s)"
+        elif isinstance(value, dict):
+            rendered = f"{len(value)} field(s)"
+        else:
+            rendered = type(value).__name__
+        lines.append(f"{key}: {_compact_text(rendered, 220)}")
+    return lines
+
+
+def _compact_text(value: str, limit: int) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
 
 
 def _safe_path_part(value: str) -> str:

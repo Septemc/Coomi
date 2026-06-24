@@ -5,6 +5,7 @@ from rich.style import Style
 from textual.strip import Strip
 
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
+from coomi.ui.widgets.plan_panel import PlanPanel
 
 
 def test_slice_text_cells_handles_wide_characters():
@@ -23,3 +24,28 @@ def test_apply_highlight_uses_terminal_cell_offsets():
     assert highlighted_text == "A北京B"
     highlighted_segments = [segment for segment in highlighted._segments if segment.style]
     assert any("北京" in segment.text for segment in highlighted_segments)
+
+
+def test_plan_panel_collects_multi_select_answers():
+    panel = PlanPanel(
+        [
+            {
+                "header": "方向",
+                "question": "你想重点学习哪些方向？",
+                "multiSelect": True,
+                "options": [
+                    {"label": "CV", "value": "cv", "description": "图像方向"},
+                    {"label": "NLP", "value": "nlp", "description": "文本方向"},
+                ],
+            }
+        ]
+    )
+
+    panel.toggle_current_option()
+    panel.move_down()
+    panel.toggle_current_option()
+
+    answer = panel.get_all_answers()[0]
+    assert answer["option"] == ["cv", "nlp"]
+    assert answer["labels"] == ["CV", "NLP"]
+    assert answer["label"] == "CV, NLP"

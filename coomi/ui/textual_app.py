@@ -229,6 +229,7 @@ class CoomiApp(App):
         Binding("down", "question_down", "↓", priority=True),
         Binding("left", "question_left", "←", priority=True),
         Binding("right", "question_right", "→", priority=True),
+        Binding("space", "question_toggle", "Toggle", priority=True),
         Binding("enter", "question_confirm", "Confirm", priority=True),
         Binding("escape", "question_cancel_or_exit", "Cancel/Exit", priority=True),
     ]
@@ -804,7 +805,8 @@ class CoomiApp(App):
         """条件路由：统一基于 _interactive_mode 拦截 keys，否则放行给 TextArea"""
         question_actions = {
             "question_up", "question_down", "question_left",
-            "question_right", "question_confirm", "question_cancel_or_exit",
+            "question_right", "question_toggle", "question_confirm",
+            "question_cancel_or_exit",
         }
         if action not in question_actions:
             return True
@@ -840,6 +842,10 @@ class CoomiApp(App):
 
         # 问询模式
         if mode == "question":
+            if action == "question_toggle":
+                if self._plan_panel and self._plan_panel._is_other_selected:
+                    return None
+                return True
             # Other 选中且无内容时，阻止左右键切换问题
             if action in ("question_left", "question_right") and self._plan_panel:
                 if self._plan_panel._is_other_selected:
@@ -875,6 +881,10 @@ class CoomiApp(App):
             self._model_picker.move_down()
         elif self._interactive_mode == "context_picker" and self._context_picker:
             self._context_picker.move_down()
+
+    async def action_question_toggle(self) -> None:
+        if self._interactive_mode == "question" and self._plan_panel:
+            self._plan_panel.toggle_current_option()
 
     async def action_question_left(self) -> None:
         if self._interactive_mode == "question" and self._plan_panel:

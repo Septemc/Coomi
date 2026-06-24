@@ -46,6 +46,7 @@ class PermissionSystem:
         "Grep": PermissionLevel.AUTO,
         "WebFetch": PermissionLevel.AUTO,
         "WebSearch": PermissionLevel.AUTO,
+        "AskUserQuestion": PermissionLevel.AUTO,
 
         # 写操作 / shell - 默认需要确认
         "Write": PermissionLevel.ASK,
@@ -96,7 +97,7 @@ class PermissionSystem:
             return PermissionLevel.AUTO
 
         if self._mode == PermissionMode.ASK_APPROVAL:
-            if tool_name in {"Read", "Glob", "Grep"}:
+            if tool_name in {"Read", "Glob", "Grep", "AskUserQuestion"}:
                 return PermissionLevel.AUTO
             return PermissionLevel.ASK
 
@@ -111,7 +112,16 @@ class PermissionSystem:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> PermissionLevel:
-        if tool_name in {"Read", "Glob", "Grep", "WebFetch", "WebSearch", "Write", "Edit"}:
+        if tool_name in {
+            "Read",
+            "Glob",
+            "Grep",
+            "WebFetch",
+            "WebSearch",
+            "Write",
+            "Edit",
+            "AskUserQuestion",
+        }:
             return PermissionLevel.AUTO
 
         if tool_name in {"Bash", "PowerShell"}:

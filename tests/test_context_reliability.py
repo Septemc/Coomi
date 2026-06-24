@@ -7,7 +7,7 @@ import pytest
 
 from coomi.engine.loop import AgentLoop
 from coomi.engine.loop_runner import _step_completion_confirmed
-from coomi.engine.tool_executor import ToolExecutor
+from coomi.engine.tool_executor import ToolExecutor, _summarize_arguments
 from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
 from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
@@ -16,6 +16,7 @@ from coomi.services.llm.provider import LLMProvider
 from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry
+from coomi.tools.user import AskUserQuestionTool
 from coomi.ui.events import TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
@@ -82,6 +83,15 @@ class WebSearchCountingTool(CountingTool):
             },
             "required": ["query"],
         }
+
+
+class FakeQuestionApp:
+    def __init__(self):
+        self.questions: list[dict] | None = None
+
+    async def _handle_ask_questions(self, questions: list[dict]) -> dict:
+        self.questions = questions
+        return {0: {"option": "A", "label": "A", "other_text": None}}
 
 
 class ParseErrorProvider(LLMProvider):
@@ -315,6 +325,66 @@ async def test_tool_executor_denies_ask_permission_without_ui():
     assert outcome.is_error
     assert "Permission required" in outcome.result_text
     assert tool.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_bypasses_permission_prompt():
+    registry = ToolRegistry()
+    registry.register(AskUserQuestionTool())
+    app = FakeQuestionApp()
+    executor = ToolExecutor(registry, app_context=app)
+    session = Session(id="s")
+    questions = [
+        {
+            "header": "基础",
+            "question": "你目前的深度学习基础在什么水平？",
+            "options": [
+                {"label": "入门级", "description": "了解基本概念"},
+                {"label": "中级", "description": "做过项目"},
+            ],
+        }
+    ]
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_ask", name="AskUserQuestion", arguments={"questions": questions}),
+    )
+
+    assert not outcome.is_error
+    assert app.questions == questions
+    assert '"label": "A"' in outcome.result_text
+
+
+def test_permission_summary_formats_questions_without_raw_dict():
+    summary = _summarize_arguments(
+        {
+            "questions": [
+                {
+                    "header": "基础",
+                    "question": "你目前的深度学习基础在什么水平？",
+                    "options": [
+                        {"label": "入门级", "description": "了解基本概念"},
+                        {"label": "中级", "description": "做过项目"},
+                    ],
+                },
+                {
+                    "header": "方向",
+                    "question": "你想重点学习哪些方向？",
+                    "multiSelect": True,
+                    "options": [
+                        {"label": "CV", "description": "图像分类"},
+                        {"label": "NLP", "description": "文本分类"},
+                    ],
+                },
+            ]
+        },
+        tool_name="AskUserQuestion",
+    )
+
+    assert "Questions: 2" in summary
+    assert "Q1: 你目前的深度学习基础在什么水平？ (2 options)" in summary
+    assert "Q2: 你想重点学习哪些方向？ (2 options multi-select)" in summary
+    assert "{'questions'" not in summary
 
 
 @pytest.mark.asyncio
@@ -631,9 +701,11 @@ def test_permission_modes_change_tool_policy():
 
     permissions.set_mode(PermissionMode.ASK_APPROVAL)
     assert permissions.check_permission("Read", {"file_path": "x"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("AskUserQuestion", {"questions": []}) == PermissionLevel.AUTO
     assert permissions.check_permission("WebFetch", {"url": "https://example.com"}) == PermissionLevel.ASK
 
     permissions.set_mode(PermissionMode.APPROVE_FOR_ME)
+    assert permissions.check_permission("AskUserQuestion", {"questions": []}) == PermissionLevel.AUTO
     assert permissions.check_permission("Write", {"file_path": "x"}) == PermissionLevel.AUTO
     assert permissions.check_permission("Bash", {"command": "python -m pytest"}) == PermissionLevel.AUTO
     assert permissions.check_permission("Bash", {"command": "rm -rf /"}) == PermissionLevel.ASK
