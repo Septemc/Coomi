@@ -75,6 +75,11 @@ class GenericOpenAIProvider(LLMProvider):
             fallback = dict(params)
             fallback.pop("tool_choice", None)
             return fallback
+        if "tools" in params:
+            fallback = dict(params)
+            fallback.pop("tools", None)
+            fallback.pop("tool_choice", None)
+            return fallback
         return None
 
     async def _create_completion_with_fallback(self, params: dict[str, Any]):
@@ -93,7 +98,7 @@ class GenericOpenAIProvider(LLMProvider):
                     raise
                 current = fallback
 
-    def _parse_response(self, response) -> LLMResponse:
+    def _parse_response(self, response, tools_enabled: bool = True) -> LLMResponse:
         """解析非流式响应 — 子类可覆盖"""
         choice = response.choices[0]
         content = choice.message.content
@@ -101,7 +106,8 @@ class GenericOpenAIProvider(LLMProvider):
         content, tag_reasoning = _strip_thinking_tags(content)
         if tag_reasoning:
             reasoning_content = ((reasoning_content or "") + tag_reasoning).strip()
-        content, text_tool_calls = strip_text_tool_calls(content)
+        text_tool_mode = self.get_text_tool_mode() if tools_enabled else "disabled"
+        content, text_tool_calls = strip_text_tool_calls(content, mode=text_tool_mode)
         tool_calls = None
         if choice.message.tool_calls:
             tool_calls = []
@@ -133,6 +139,7 @@ class GenericOpenAIProvider(LLMProvider):
                         arguments=tc["arguments"],
                         raw_arguments=tc.get("raw_arguments"),
                         parse_error=tc.get("parse_error"),
+                        source=tc.get("source", "text_fallback"),
                     )
                 )
 
@@ -154,7 +161,7 @@ class GenericOpenAIProvider(LLMProvider):
     ) -> LLMResponse:
         params = self._build_params(messages, tools, stream=False)
         response = await self._create_completion_with_fallback(params)
-        return self._parse_response(response)
+        return self._parse_response(response, tools_enabled=bool(tools))
 
     async def chat_stream(
         self,

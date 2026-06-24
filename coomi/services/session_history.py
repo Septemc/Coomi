@@ -202,6 +202,7 @@ def _message_to_json(message: Message) -> dict[str, Any]:
                 "arguments": tool_call.arguments,
                 "raw_arguments": tool_call.raw_arguments,
                 "parse_error": tool_call.parse_error,
+                "source": tool_call.source,
             }
             for tool_call in (message.tool_calls or [])
         ],
@@ -217,6 +218,7 @@ def _message_from_json(data: dict[str, Any]) -> Message:
             arguments=item.get("arguments") or {},
             raw_arguments=item.get("raw_arguments"),
             parse_error=item.get("parse_error"),
+            source=item.get("source") or "native",
         )
         for item in data.get("tool_calls") or []
     ]

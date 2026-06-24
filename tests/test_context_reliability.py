@@ -116,6 +116,9 @@ class ParseErrorProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         return "fake"
 
+    def get_text_tool_mode(self) -> str:
+        return "disabled"
+
 
 class TextToolCallProvider(LLMProvider):
     def __init__(self):
@@ -148,6 +151,9 @@ class TextToolCallProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         return "fake"
 
+    def get_text_tool_mode(self) -> str:
+        return "structured"
+
 
 class MimoToolCodeProvider(LLMProvider):
     def __init__(self):
@@ -177,6 +183,14 @@ class MimoToolCodeProvider(LLMProvider):
 
     def get_model_display_name(self) -> str:
         return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "mimo"
+
+
+class DisabledTextToolCodeProvider(MimoToolCodeProvider):
+    def get_text_tool_mode(self) -> str:
+        return "disabled"
 
 
 def test_message_guard_repairs_tool_pairing_and_strips_reasoning():
@@ -375,10 +389,11 @@ def test_text_tool_call_filter_parses_xml_style_tool_calls():
     assert bash_call is not None
     assert bash_call["name"] == "bash"
     assert bash_call["arguments"]["command"] == "dir /a"
+    assert bash_call["source"] == "text_fallback"
 
 
 def test_text_tool_call_filter_parses_mimo_tool_code_and_single_tags():
-    stream_filter = TextToolCallFilter()
+    stream_filter = TextToolCallFilter(mode="mimo")
     visible, calls = stream_filter.feed(
         '<tool_code> glob("**", "F:\\_WorkSpace\\Projects\\Storyteller-App") </tool_code>'
     )
@@ -401,13 +416,24 @@ def test_text_tool_call_filter_parses_mimo_tool_code_and_single_tags():
     assert keyword_call["arguments"]["path"] == "F:\\_WorkSpace\\Projects\\Storyteller-App"
 
     read_call = parse_text_tool_call(
-        "<read_file> F:\\_WorkSpace\\Projects\\Storyteller-App </read_file>"
+        "<read_file> F:\\_WorkSpace\\Projects\\Storyteller-App </read_file>",
+        mode="mimo",
     )
     assert read_call is not None
     assert read_call["name"] == "read_file"
     assert read_call["arguments"] == {
         "file_path": "F:\\_WorkSpace\\Projects\\Storyteller-App"
     }
+
+
+def test_text_tool_call_filter_does_not_parse_single_tags_by_default():
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed("Example: <bash>echo hello</bash> is a tag.")
+    tail, tail_calls = stream_filter.flush()
+
+    assert visible + tail == "Example: <bash>echo hello</bash> is a tag."
+    assert calls + tail_calls == []
+    assert parse_text_tool_call("<read_file> C:\\tmp\\a.txt </read_file>") is None
 
 
 @pytest.mark.asyncio
@@ -425,7 +451,7 @@ async def test_agent_loop_executes_text_tool_call_without_leaking_markup(tmp_pat
         permission_system=permissions,
     )
 
-    events = [event async for event in agent.run_stream(session, "你知道 coomi 吗")]
+    events = [event async for event in agent.run_stream(session, "please web search coomi")]
 
     visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
     assert "<tool_call>" not in visible_text
@@ -439,6 +465,7 @@ async def test_agent_loop_executes_text_tool_call_without_leaking_markup(tmp_pat
     ]
     assert assistant_tool_calls
     assert assistant_tool_calls[0].name == "WebSearch"
+    assert assistant_tool_calls[0].source == "text_fallback"
     assert assistant_tool_calls[0].arguments["query"] == "coomi software project"
     assert any(msg.role == "tool" and msg.content == "search result" for msg in session.messages)
 
@@ -451,7 +478,7 @@ async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_pat
     session = Session(id="s", system_prompt="sys")
     agent = AgentLoop(MimoToolCodeProvider(), registry, project_path=str(tmp_path))
 
-    events = [event async for event in agent.run_stream(session, "什么情况")]
+    events = [event async for event in agent.run_stream(session, "please search project files")]
 
     visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
     assert "<tool_code>" not in visible_text
@@ -465,11 +492,44 @@ async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_pat
     ]
     assert assistant_tool_calls
     assert assistant_tool_calls[0].name == "Glob"
+    assert assistant_tool_calls[0].source == "text_fallback"
     assert assistant_tool_calls[0].arguments == {
         "pattern": "**/*",
         "path": "F:\\_WorkSpace\\Projects\\Storyteller-App",
     }
     assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_does_not_execute_text_tool_call_when_tools_omitted(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(MimoToolCodeProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "hi")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_code>" in visible_text
+    assert tool.calls == 0
+    assert not any(msg.role == "tool" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_respects_provider_disabled_text_tool_mode(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(DisabledTextToolCodeProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please search project files")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_code>" in visible_text
+    assert tool.calls == 0
+    assert not any(msg.role == "tool" for msg in session.messages)
 
 
 def test_loop_step_requires_explicit_completion_marker():
@@ -534,6 +594,35 @@ async def test_plan_mode_blocks_write_tools_before_permission(tmp_path: Path):
 
     assert outcome.is_error
     assert "Plan Mode is active" in outcome.result_text
+    assert tool.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_forces_ask_for_text_fallback_write_even_full_access(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = WriteCountingTool()
+    registry.register(tool)
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="call_1",
+            name="Write",
+            arguments={"file_path": "x"},
+            source="text_fallback",
+        ),
+    )
+
+    assert outcome.is_error
+    assert "Permission required" in outcome.result_text
     assert tool.calls == 0
 
 

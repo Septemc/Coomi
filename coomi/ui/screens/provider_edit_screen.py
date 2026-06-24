@@ -12,11 +12,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Select, Static
 from textual import on
 
-from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS
+from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS, TOOL_PROTOCOLS
 
 FIELD_DEFS = [
     ("id", "Provider ID", "唯一标识，如 my-provider"),
     ("type", "类型 (generic/openai/anthropic)", "generic"),
+    ("tool_protocol", "Tool protocol (auto/native/structured/mimo/disabled)", "auto"),
     ("display", "显示名称", "如 DeepSeek V4"),
     ("api_key", "API Key", "sk-xxx"),
     ("base_url", "Base URL", "https://api.deepseek.com"),
@@ -50,6 +51,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             self._init_values = {
                 "id": provider.id,
                 "type": provider.type,
+                "tool_protocol": provider.tool_protocol,
                 "display": provider.display,
                 "api_key": provider.api_key,
                 "base_url": provider.base_url,
@@ -60,6 +62,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             self._init_values = {
                 "id": "",
                 "type": "generic",
+                "tool_protocol": "auto",
                 "display": "",
                 "api_key": "",
                 "base_url": "",
@@ -113,6 +116,7 @@ class ProviderEditScreen(ModalScreen[bool]):
         fields_to_fill = {
             "id": preset_id,
             "type": preset.get("type", "generic"),
+            "tool_protocol": preset.get("tool_protocol", "auto"),
             "display": preset.get("display", ""),
             "base_url": preset.get("base_url", ""),
             "model": preset.get("model", ""),
@@ -152,6 +156,13 @@ class ProviderEditScreen(ModalScreen[bool]):
             self.app._show_command_result("[red]类型只能是 generic / openai / anthropic[/red]")
             return
 
+        tool_protocol = (values.get("tool_protocol") or "auto").lower().replace("-", "_")
+        if tool_protocol not in TOOL_PROTOCOLS:
+            self.app._show_command_result(
+                "[red]Tool protocol must be auto / native / structured / mimo / disabled[/red]"
+            )
+            return
+
         config = ProviderConfig(
             id=values["id"],
             type=provider_type,
@@ -160,6 +171,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             model=values["model"],
             base_url=values.get("base_url", ""),
             fast_model=values.get("fast_model") or None,
+            tool_protocol=tool_protocol,
         )
         self._config_mgr.add_provider(config)
         self.dismiss(True)

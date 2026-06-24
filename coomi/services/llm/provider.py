@@ -1,4 +1,4 @@
-"""LLM Provider 抽象基类"""
+"""Base interface for LLM providers."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -8,7 +8,7 @@ from ...types import LLMResponse
 
 
 class LLMProvider(ABC):
-    """LLM Provider 抽象基类 - 所有厂商实现必须继承"""
+    """Common interface implemented by all model providers."""
 
     @abstractmethod
     async def chat(
@@ -17,16 +17,7 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> LLMResponse:
-        """异步调用LLM
-
-        Args:
-            messages: 消息列表
-            tools: 工具定义列表（OpenAI格式）
-            **kwargs: 厂商特定参数
-
-        Returns:
-            LLMResponse: 统一的响应格式
-        """
+        """Run a non-streaming model request."""
         pass
 
     @abstractmethod
@@ -35,15 +26,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         **kwargs,
     ) -> AsyncIterator[str]:
-        """流式纯文本输出（不支持工具调用）
-
-        Args:
-            messages: 消息列表
-            **kwargs: 厂商特定参数
-
-        Yields:
-            str: 文本片段
-        """
+        """Stream plain text from the model."""
         pass
 
     @abstractmethod
@@ -53,24 +36,29 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> AsyncIterator[dict[str, Any]]:
-        """流式输出 + 工具调用
-
-        Args:
-            messages: 消息列表
-            tools: 工具定义列表
-            **kwargs: 厂商特定参数
-
-        Yields:
-            dict: {"type": "content", "content": "..."} 或 {"type": "tool_call", "data": {...}} 或 {"type": "usage", "data": {...}}
-        """
+        """Stream text, tool-call events, and usage events."""
         pass
 
     @abstractmethod
     def switch_model(self, model_name: str) -> str:
-        """运行时切换模型（纯内存操作，无需 async）"""
+        """Switch the active model in memory."""
         pass
 
     @abstractmethod
     def get_model_display_name(self) -> str:
-        """获取人类可读的模型显示名称（纯内存操作，无需 async）"""
+        """Return the human-readable model/provider display name."""
         pass
+
+    def get_tool_protocol(self) -> str:
+        """Return the resolved provider tool protocol."""
+        config = getattr(self, "config", None)
+        if config and hasattr(config, "resolved_tool_protocol"):
+            return config.resolved_tool_protocol()
+        return "native"
+
+    def get_text_tool_mode(self) -> str:
+        """Return disabled/structured/mimo text-tool parsing mode for this provider."""
+        config = getattr(self, "config", None)
+        if config and hasattr(config, "text_tool_mode"):
+            return config.text_tool_mode()
+        return "disabled"

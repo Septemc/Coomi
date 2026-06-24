@@ -18,6 +18,7 @@ from ..types import Session, ToolCall
 
 LARGE_RESULT_THRESHOLD = 50 * 1024
 PREVIEW_CHARS = 4 * 1024
+TEXT_FALLBACK_FORCE_ASK_TOOLS = {"Write", "Edit", "Bash", "PowerShell", "Agent"}
 
 
 @dataclass
@@ -110,7 +111,11 @@ class ToolExecutor:
                 persist=False,
             )
 
-        allowed, denial_message = await self._check_permission(tool, tool_call.arguments)
+        allowed, denial_message = await self._check_permission(
+            tool,
+            tool_call.arguments,
+            source=tool_call.source,
+        )
         if not allowed:
             return self._outcome(
                 session,
@@ -156,8 +161,11 @@ class ToolExecutor:
         self,
         tool: BaseTool,
         arguments: dict[str, Any],
+        source: str = "native",
     ) -> tuple[bool, str | None]:
         level = self.permission_system.check_permission(tool.name, arguments)
+        if source == "text_fallback" and tool.name in TEXT_FALLBACK_FORCE_ASK_TOOLS:
+            level = PermissionLevel.ASK
         if level == PermissionLevel.AUTO:
             return True, None
         if level == PermissionLevel.DENY:

@@ -17,6 +17,7 @@ class ToolCall:
     arguments: dict[str, Any]
     raw_arguments: str | None = None
     parse_error: str | None = None
+    source: str = "native"
 
 
 @dataclass

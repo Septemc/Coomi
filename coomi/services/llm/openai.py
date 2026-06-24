@@ -46,7 +46,8 @@ class OpenAIProvider(LLMProvider):
 
         choice = response.choices[0]
         content = choice.message.content
-        content, text_tool_calls = strip_text_tool_calls(content)
+        text_tool_mode = self.get_text_tool_mode() if tools else "disabled"
+        content, text_tool_calls = strip_text_tool_calls(content, mode=text_tool_mode)
         tool_calls = None
         if choice.message.tool_calls:
             tool_calls = []
@@ -78,6 +79,7 @@ class OpenAIProvider(LLMProvider):
                         arguments=tc["arguments"],
                         raw_arguments=tc.get("raw_arguments"),
                         parse_error=tc.get("parse_error"),
+                        source=tc.get("source", "text_fallback"),
                     )
                 )
 

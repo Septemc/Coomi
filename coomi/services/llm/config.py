@@ -14,6 +14,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "model": "MiMo-V2.5-Pro",
         "fast_model": "MiMo-V2.5",
+        "tool_protocol": "mimo",
     },
     "mimo-anthropic": {
         "type": "anthropic",
@@ -21,6 +22,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
         "model": "MiMo-V2.5-Pro",
         "fast_model": "MiMo-V2.5",
+        "tool_protocol": "mimo",
     },
     "minimax-openai": {
         "type": "generic",
@@ -28,6 +30,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "base_url": "https://api.minimaxi.com/v1",
         "model": "MiniMax-M2.7",
         "fast_model": "MiniMax-M2.7",
+        "tool_protocol": "native",
     },
     "minimax-anthropic": {
         "type": "anthropic",
@@ -35,8 +38,11 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "base_url": "https://api.minimaxi.com/anthropic",
         "model": "MiniMax-M2.7",
         "fast_model": "MiniMax-M2.7",
+        "tool_protocol": "native",
     },
 }
+
+TOOL_PROTOCOLS = {"auto", "native", "structured", "mimo", "disabled"}
 
 
 @dataclass
@@ -49,12 +55,14 @@ class ProviderConfig:
     model: str
     base_url: str = ""
     fast_model: str | None = None
+    tool_protocol: str = "auto"
 
     @classmethod
     def from_dict(cls, provider_id: str, data: dict) -> ProviderConfig:
         provider_type = str(data.get("type", "generic")).lower()
         if provider_type == "deepseek":
             provider_type = "generic"
+        tool_protocol = _normalize_tool_protocol(data.get("tool_protocol", "auto"))
         return cls(
             id=provider_id,
             type=provider_type,
@@ -63,6 +71,7 @@ class ProviderConfig:
             model=data.get("model", ""),
             base_url=data.get("base_url", ""),
             fast_model=data.get("fast_model"),
+            tool_protocol=tool_protocol,
         )
 
     def to_dict(self) -> dict:
@@ -76,7 +85,57 @@ class ProviderConfig:
             d["base_url"] = self.base_url
         if self.fast_model:
             d["fast_model"] = self.fast_model
+        if self.tool_protocol and self.tool_protocol != "auto":
+            d["tool_protocol"] = _normalize_tool_protocol(self.tool_protocol)
         return d
+
+    def resolved_tool_protocol(self) -> str:
+        protocol = _normalize_tool_protocol(self.tool_protocol)
+        if protocol != "auto":
+            return protocol
+
+        fingerprint = " ".join(
+            [
+                self.id,
+                self.type,
+                self.display,
+                self.model,
+                self.base_url,
+            ]
+        ).casefold()
+        if "mimo" in fingerprint or "xiaomimimo" in fingerprint:
+            return "mimo"
+        if "minimax" in fingerprint or "minimaxi" in fingerprint:
+            return "native"
+        if self.type in {"openai", "anthropic"}:
+            return "native"
+        return "structured"
+
+    def text_tool_mode(self) -> str:
+        protocol = self.resolved_tool_protocol()
+        if protocol == "mimo":
+            return "mimo"
+        if protocol == "structured":
+            return "structured"
+        return "disabled"
+
+
+def _normalize_tool_protocol(value: object) -> str:
+    protocol = str(value or "auto").strip().casefold().replace("-", "_")
+    aliases = {
+        "openai": "native",
+        "anthropic": "native",
+        "function_calling": "native",
+        "tool_calling": "native",
+        "none": "disabled",
+        "off": "disabled",
+        "text": "structured",
+        "text_fallback": "structured",
+        "structured_only": "structured",
+        "mimo_text": "mimo",
+    }
+    protocol = aliases.get(protocol, protocol)
+    return protocol if protocol in TOOL_PROTOCOLS else "auto"
 
 
 class ConfigManager:

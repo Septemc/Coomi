@@ -79,6 +79,7 @@ def create_fast_provider(main_provider: LLMProvider) -> LLMProvider | None:
         api_key=config.api_key,
         base_url=config.base_url,
         model=config.fast_model,
+        tool_protocol=config.tool_protocol,
         fast_model=None,  # 避免递归
     )
     return _create_from_config(fast_config)

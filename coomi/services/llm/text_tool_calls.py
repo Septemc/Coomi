@@ -7,6 +7,15 @@ import uuid
 from typing import Any
 
 
+TEXT_TOOL_MODE_DISABLED = "disabled"
+TEXT_TOOL_MODE_STRUCTURED = "structured"
+TEXT_TOOL_MODE_MIMO = "mimo"
+TEXT_TOOL_MODES = {
+    TEXT_TOOL_MODE_DISABLED,
+    TEXT_TOOL_MODE_STRUCTURED,
+    TEXT_TOOL_MODE_MIMO,
+}
+
 _TOOL_BLOCK_TAGS = ("tool_call", "tool_code")
 _SINGLE_TOOL_TAGS = (
     "read_file",
@@ -17,7 +26,7 @@ _SINGLE_TOOL_TAGS = (
     "web_search",
     "web_fetch",
 )
-_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
+_MIMO_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
 
 _FUNCTION_PATTERNS = (
     re.compile(r"<\s*function\s*=\s*['\"]?([^'\">\s]+)['\"]?\s*>", re.IGNORECASE),
@@ -37,13 +46,18 @@ _CLOSING_PARAMETER_PATTERN = re.compile(r"</\s*parameter\s*>", re.IGNORECASE)
 class TextToolCallFilter:
     """Remove textual tool-call blocks from visible text and return parsed calls."""
 
-    def __init__(self):
+    def __init__(self, mode: str | None = TEXT_TOOL_MODE_STRUCTURED):
+        self.mode = normalize_text_tool_mode(mode)
+        self._tool_start_tags = _tool_start_tags_for_mode(self.mode)
         self._pending = ""
         self._in_tool_call = False
         self._tool_buffer = ""
         self._tool_tag: str | None = None
 
     def feed(self, chunk: str) -> tuple[str, list[dict[str, Any]]]:
+        if self.mode == TEXT_TOOL_MODE_DISABLED:
+            return chunk, []
+
         text = self._pending + chunk
         self._pending = ""
         visible_parts: list[str] = []
@@ -61,7 +75,7 @@ class TextToolCallFilter:
 
                 end_index = end + len(end_tag)
                 self._tool_buffer += text[:end_index]
-                tool_call = parse_text_tool_call(self._tool_buffer)
+                tool_call = parse_text_tool_call(self._tool_buffer, mode=self.mode)
                 if tool_call:
                     tool_calls.append(tool_call)
                 self._tool_buffer = ""
@@ -70,9 +84,9 @@ class TextToolCallFilter:
                 text = text[end_index:]
                 continue
 
-            match = _find_next_tool_start(text)
+            match = _find_next_tool_start(text, self._tool_start_tags)
             if match is None:
-                keep = _possible_start_prefix_len(text)
+                keep = _possible_start_prefix_len(text, self._tool_start_tags)
                 if keep:
                     visible_parts.append(text[:-keep])
                     self._pending = text[-keep:]
@@ -92,15 +106,18 @@ class TextToolCallFilter:
 
     def flush(self) -> tuple[str, list[dict[str, Any]]]:
         """Flush unterminated buffered text at stream end."""
+        if self.mode == TEXT_TOOL_MODE_DISABLED:
+            return "", []
+
         visible = self._pending
         self._pending = ""
         tool_calls: list[dict[str, Any]] = []
 
         if self._in_tool_call and self._tool_buffer:
-            tool_call = parse_text_tool_call(self._tool_buffer)
+            tool_call = parse_text_tool_call(self._tool_buffer, mode=self.mode)
             if tool_call:
                 tool_call["parse_error"] = (
-                    "Textual tool call was not closed with </tool_call>. "
+                    "Textual tool call was not closed with the expected closing tag. "
                     "The tool was not executed. Retry with a complete tool call."
                 )
                 tool_calls.append(tool_call)
@@ -113,8 +130,34 @@ class TextToolCallFilter:
         return visible, tool_calls
 
 
-def parse_text_tool_call(raw: str) -> dict[str, Any] | None:
+def normalize_text_tool_mode(mode: str | None) -> str:
+    normalized = (mode or TEXT_TOOL_MODE_STRUCTURED).strip().casefold()
+    aliases = {
+        "off": TEXT_TOOL_MODE_DISABLED,
+        "none": TEXT_TOOL_MODE_DISABLED,
+        "native": TEXT_TOOL_MODE_DISABLED,
+        "no_text": TEXT_TOOL_MODE_DISABLED,
+        "text": TEXT_TOOL_MODE_STRUCTURED,
+        "text_fallback": TEXT_TOOL_MODE_STRUCTURED,
+        "structured_only": TEXT_TOOL_MODE_STRUCTURED,
+        "xml": TEXT_TOOL_MODE_STRUCTURED,
+        "mimo_text": TEXT_TOOL_MODE_MIMO,
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in TEXT_TOOL_MODES:
+        return TEXT_TOOL_MODE_STRUCTURED
+    return normalized
+
+
+def parse_text_tool_call(
+    raw: str,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> dict[str, Any] | None:
     """Parse one XML-ish or JSON-ish tool call block into provider event data."""
+    mode = normalize_text_tool_mode(mode)
+    if mode == TEXT_TOOL_MODE_DISABLED:
+        return None
+
     raw = raw.strip()
     if not raw:
         return None
@@ -122,8 +165,10 @@ def parse_text_tool_call(raw: str) -> dict[str, Any] | None:
     tag = _opening_tag_name(raw)
     if tag == "tool_code":
         return _parse_tool_code_call(raw)
-    if tag in _SINGLE_TOOL_TAGS:
+    if tag in _SINGLE_TOOL_TAGS and mode == TEXT_TOOL_MODE_MIMO:
         return _parse_single_tag_tool_call(raw, tag)
+    if tag in _SINGLE_TOOL_TAGS:
+        return None
 
     json_call = _parse_json_tool_call(raw)
     if json_call:
@@ -134,13 +179,7 @@ def parse_text_tool_call(raw: str) -> dict[str, Any] | None:
         return None
 
     arguments = _extract_parameters(raw)
-    return {
-        "id": f"text_call_{uuid.uuid4().hex[:12]}",
-        "name": name,
-        "arguments": arguments,
-        "raw_arguments": raw,
-        "parse_error": None,
-    }
+    return _build_text_tool_call(name, arguments, raw)
 
 
 def _parse_tool_code_call(raw: str) -> dict[str, Any] | None:
@@ -150,26 +189,19 @@ def _parse_tool_code_call(raw: str) -> dict[str, Any] | None:
 
     parsed = _parse_function_call_text(body)
     if parsed is None:
-        return {
-            "id": f"text_call_{uuid.uuid4().hex[:12]}",
-            "name": "InvalidToolCall",
-            "arguments": {},
-            "raw_arguments": raw,
-            "parse_error": (
+        return _build_text_tool_call(
+            "InvalidToolCall",
+            {},
+            raw,
+            parse_error=(
                 "Could not parse <tool_code> as a supported function call. "
                 "Use a real tool call or <tool_call><function=...><parameter=...>...</tool_call>."
             ),
-        }
+        )
 
     name, positional, keyword = parsed
     arguments = _arguments_from_function_call(name, positional, keyword)
-    return {
-        "id": f"text_call_{uuid.uuid4().hex[:12]}",
-        "name": name,
-        "arguments": arguments,
-        "raw_arguments": raw,
-        "parse_error": None,
-    }
+    return _build_text_tool_call(name, arguments, raw)
 
 
 def _parse_single_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
@@ -186,20 +218,19 @@ def _parse_single_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
         "web_search": "query",
         "web_fetch": "url",
     }[tag]
-    return {
-        "id": f"text_call_{uuid.uuid4().hex[:12]}",
-        "name": tag,
-        "arguments": {argument_name: _coerce_parameter_value(body)},
-        "raw_arguments": raw,
-        "parse_error": None,
-    }
+    return _build_text_tool_call(tag, {argument_name: _coerce_parameter_value(body)}, raw)
 
 
-def strip_text_tool_calls(text: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+def strip_text_tool_calls(
+    text: str | None,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> tuple[str | None, list[dict[str, Any]]]:
     """Parse all complete text tool calls from a non-streaming response."""
     if not text:
         return text, []
-    parser = TextToolCallFilter()
+    if normalize_text_tool_mode(mode) == TEXT_TOOL_MODE_DISABLED:
+        return text, []
+    parser = TextToolCallFilter(mode=mode)
     visible, calls = parser.feed(text)
     tail, tail_calls = parser.flush()
     visible += tail
@@ -227,21 +258,20 @@ def _parse_json_tool_call(raw: str) -> dict[str, Any] | None:
 
     arguments = data.get("arguments") or data.get("input") or data.get("parameters") or {}
     if not isinstance(arguments, dict):
-        return {
-            "id": str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
-            "name": name.strip(),
-            "arguments": {},
-            "raw_arguments": raw,
-            "parse_error": "Textual JSON tool call arguments must be an object.",
-        }
+        return _build_text_tool_call(
+            name.strip(),
+            {},
+            raw,
+            call_id=str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
+            parse_error="Textual JSON tool call arguments must be an object.",
+        )
 
-    return {
-        "id": str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
-        "name": name.strip(),
-        "arguments": _normalize_argument_names(name.strip(), arguments),
-        "raw_arguments": raw,
-        "parse_error": None,
-    }
+    return _build_text_tool_call(
+        name.strip(),
+        _normalize_argument_names(name.strip(), arguments),
+        raw,
+        call_id=str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
+    )
 
 
 def _extract_function_name(raw: str) -> str | None:
@@ -486,10 +516,37 @@ def _strip_quotes_preserving_backslashes(value: str) -> str:
     return inner.replace(f"\\{quote}", quote).replace("\\\\", "\\")
 
 
-def _find_next_tool_start(text: str) -> tuple[int, str] | None:
+def _build_text_tool_call(
+    name: str,
+    arguments: dict[str, Any],
+    raw: str,
+    call_id: str | None = None,
+    parse_error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": call_id or f"text_call_{uuid.uuid4().hex[:12]}",
+        "name": name,
+        "arguments": arguments,
+        "raw_arguments": raw,
+        "parse_error": parse_error,
+        "source": "text_fallback",
+    }
+
+
+def _tool_start_tags_for_mode(mode: str) -> tuple[str, ...]:
+    if mode == TEXT_TOOL_MODE_DISABLED:
+        return ()
+    if mode == TEXT_TOOL_MODE_MIMO:
+        return _MIMO_TOOL_START_TAGS
+    return _TOOL_BLOCK_TAGS
+
+
+def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] | None:
+    if not tags:
+        return None
     lower = text.lower()
     best: tuple[int, str] | None = None
-    for tag in _TOOL_START_TAGS:
+    for tag in tags:
         token = f"<{tag}"
         start = lower.find(token)
         if start == -1:
@@ -504,12 +561,14 @@ def _find_next_tool_start(text: str) -> tuple[int, str] | None:
     return best
 
 
-def _possible_start_prefix_len(text: str) -> int:
+def _possible_start_prefix_len(text: str, tags: tuple[str, ...]) -> int:
+    if not tags:
+        return 0
     lower = text.lower()
-    max_len = min(max(len(f"<{tag}") for tag in _TOOL_START_TAGS) - 1, len(lower))
+    max_len = min(max(len(f"<{tag}") for tag in tags) - 1, len(lower))
     for size in range(max_len, 0, -1):
         suffix = lower[-size:]
-        if any(f"<{tag}".startswith(suffix) for tag in _TOOL_START_TAGS):
+        if any(f"<{tag}".startswith(suffix) for tag in tags):
             return size
     return 0
 

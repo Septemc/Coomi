@@ -398,7 +398,8 @@ class AgentLoop:
             full_content = ""
             full_reasoning = ""
             tool_calls_data = []
-            text_tool_filter = TextToolCallFilter()
+            text_tool_mode = self.llm.get_text_tool_mode() if tools else "disabled"
+            text_tool_filter = TextToolCallFilter(mode=text_tool_mode)
 
             # ---- LLM API 调用（含降级处理） ----
             try:
@@ -463,6 +464,7 @@ class AgentLoop:
                         arguments=tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
                         raw_arguments=tc.get("raw_arguments"),
                         parse_error=tc.get("parse_error"),
+                        source=tc.get("source", "native"),
                     )
                     for i, tc in enumerate(tool_calls_data)
                 ]
