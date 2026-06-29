@@ -17,15 +17,32 @@ TEXT_TOOL_MODES = {
 }
 
 _TOOL_BLOCK_TAGS = ("tool_call", "tool_code")
-_SINGLE_TOOL_TAGS = (
+_DIRECT_TOOL_TAGS = (
+    "read",
     "read_file",
+    "readfile",
     "glob",
     "grep",
     "bash",
     "powershell",
     "web_search",
+    "websearch",
     "web_fetch",
+    "webfetch",
+    "write",
+    "edit",
+    "todo",
+    "todo_write",
+    "todowrite",
+    "ask_user",
+    "ask_user_question",
+    "askuserquestion",
+    "enter_plan_mode",
+    "enterplanmode",
+    "exit_plan_mode",
+    "exitplanmode",
 )
+_SINGLE_TOOL_TAGS = _DIRECT_TOOL_TAGS
 _MIMO_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
 
 _FUNCTION_PATTERNS = (
@@ -165,6 +182,8 @@ def parse_text_tool_call(
     tag = _opening_tag_name(raw)
     if tag == "tool_code":
         return _parse_tool_code_call(raw)
+    if tag in _DIRECT_TOOL_TAGS:
+        return _parse_direct_tag_tool_call(raw, tag)
     if tag in _SINGLE_TOOL_TAGS and mode == TEXT_TOOL_MODE_MIMO:
         return _parse_single_tag_tool_call(raw, tag)
     if tag in _SINGLE_TOOL_TAGS:
@@ -209,16 +228,58 @@ def _parse_single_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
     if not body:
         return None
 
-    argument_name = {
+    argument_name = _single_tag_argument_name(tag)
+    if not argument_name:
+        return _build_text_tool_call(tag, {}, raw)
+    return _build_text_tool_call(tag, {argument_name: _coerce_parameter_value(body)}, raw)
+
+
+def _parse_direct_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
+    body = _strip_outer_tag(raw, tag).strip()
+    if not body:
+        return _build_text_tool_call(tag, {}, raw)
+
+    arguments = _extract_direct_tag_parameters(body)
+    if arguments:
+        return _build_text_tool_call(tag, _normalize_argument_names(tag, arguments), raw)
+
+    argument_name = _single_tag_argument_name(tag)
+    if argument_name:
+        return _build_text_tool_call(tag, {argument_name: _coerce_parameter_value(body)}, raw)
+    return _build_text_tool_call(tag, {}, raw)
+
+
+def _extract_direct_tag_parameters(body: str) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    pattern = re.compile(
+        r"<\s*([a-zA-Z_][\w.-]*)\b[^>]*>(.*?)</\s*\1\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(body):
+        name = match.group(1).strip()
+        value = match.group(2).strip()
+        if not name:
+            continue
+        arguments[name] = _coerce_parameter_value(value)
+    return arguments
+
+
+def _single_tag_argument_name(tag: str) -> str | None:
+    return {
+        "read": "file_path",
         "read_file": "file_path",
+        "readfile": "file_path",
         "glob": "pattern",
         "grep": "pattern",
         "bash": "command",
         "powershell": "command",
         "web_search": "query",
+        "websearch": "query",
         "web_fetch": "url",
-    }[tag]
-    return _build_text_tool_call(tag, {argument_name: _coerce_parameter_value(body)}, raw)
+        "webfetch": "url",
+        "write": "file_path",
+        "edit": "file_path",
+    }.get(tag)
 
 
 def strip_text_tool_calls(
@@ -538,7 +599,7 @@ def _tool_start_tags_for_mode(mode: str) -> tuple[str, ...]:
         return ()
     if mode == TEXT_TOOL_MODE_MIMO:
         return _MIMO_TOOL_START_TAGS
-    return _TOOL_BLOCK_TAGS
+    return (*_TOOL_BLOCK_TAGS, *_DIRECT_TOOL_TAGS)
 
 
 def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] | None:
