@@ -85,6 +85,19 @@ class WebSearchCountingTool(CountingTool):
         }
 
 
+class BashCountingTool(CountingTool):
+    name = "Bash"
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+            },
+            "required": ["command"],
+        }
+
+
 class FakeQuestionApp:
     def __init__(self):
         self.questions: list[dict] | None = None
@@ -235,6 +248,110 @@ class DsmlToolCallProvider(LLMProvider):
 
     def get_text_tool_mode(self) -> str:
         return "structured"
+
+
+class JsonTextToolCallProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "content",
+                "content": 'Looking {"name":"Read","arguments":{"file_path":"F:\\\\tmp\\\\a.txt"}} done',
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "structured"
+
+
+class FunctionTextToolCallProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {"type": "content", "content": 'I will read Read(file_path="F:\\tmp\\fn.txt")'}
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "structured"
+
+
+class MalformedThenValidTextToolProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "content",
+                "content": "<tool_call><function=Read><parameter=file_path>F:\\tmp\\missing-close.txt",
+            }
+        elif self.calls == 2:
+            yield {
+                "type": "content",
+                "content": (
+                    '<tool_call>{"name":"Read","arguments":{"file_path":"F:\\\\tmp\\\\fixed.txt"}}'
+                    "</tool_call>"
+                ),
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "structured"
+
+
+class AlwaysMalformedTextToolProvider(MalformedThenValidTextToolProvider):
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        yield {
+            "type": "content",
+            "content": '{"name":"Read","arguments":',
+        }
 
 
 class DisabledTextToolCodeProvider(MimoToolCodeProvider):
@@ -562,6 +679,44 @@ def test_text_tool_call_filter_parses_dsml_tool_calls_without_leaking_markup():
     }
 
 
+def test_text_tool_call_filter_parses_json_function_and_fenced_calls():
+    json_filter = TextToolCallFilter()
+    visible, calls = json_filter.feed(
+        'Before {"name":"Read","arguments":{"file_path":"F:\\\\tmp\\\\a.txt"}} after'
+    )
+    assert visible == "Before  after"
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Read"
+    assert calls[0]["arguments"] == {"file_path": "F:\\tmp\\a.txt"}
+
+    function_filter = TextToolCallFilter()
+    visible, calls = function_filter.feed('Run Bash(command="echo hello") now')
+    assert visible == "Run  now"
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Bash"
+    assert calls[0]["arguments"] == {"command": "echo hello"}
+
+    fenced_call = parse_text_tool_call(
+        '```json\n{"tool":"Read","input":{"file_path":"F:\\\\tmp\\\\b.txt"}}\n```'
+    )
+    assert fenced_call is not None
+    assert fenced_call["name"] == "Read"
+    assert fenced_call["arguments"] == {"file_path": "F:\\tmp\\b.txt"}
+
+
+def test_text_tool_call_filter_turns_malformed_calls_into_correction():
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed('{"name":"Read","arguments":')
+    tail, tail_calls = stream_filter.flush()
+
+    assert visible + tail == ""
+    all_calls = calls + tail_calls
+    assert len(all_calls) == 1
+    assert all_calls[0]["name"] == "InvalidToolCall"
+    assert "Malformed text tool call detected" in all_calls[0]["parse_error"]
+    assert "Read: file_path" in all_calls[0]["parse_error"]
+
+
 def test_text_tool_call_filter_does_not_parse_single_tags_by_default():
     stream_filter = TextToolCallFilter()
     visible, calls = stream_filter.feed("Example: <bash>echo hello</bash> is a tag.")
@@ -570,6 +725,19 @@ def test_text_tool_call_filter_does_not_parse_single_tags_by_default():
     assert visible + tail == "Example: <bash>echo hello</bash> is a tag."
     assert calls + tail_calls == []
     assert parse_text_tool_call("<read_file> C:\\tmp\\a.txt </read_file>") is None
+
+
+def test_text_tool_call_filter_does_not_misread_plain_language():
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed(
+        "I can read the plan, edit the summary, and search later without using a tool."
+    )
+    tail, tail_calls = stream_filter.flush()
+
+    assert visible + tail == (
+        "I can read the plan, edit the summary, and search later without using a tool."
+    )
+    assert calls + tail_calls == []
 
 
 @pytest.mark.asyncio
@@ -637,6 +805,54 @@ async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_executes_json_text_tool_call_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(JsonTextToolCallProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please read a file")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert '{"name"' not in visible_text
+    assert tool.calls == 1
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls[0].name == "Read"
+    assert assistant_tool_calls[0].arguments == {"file_path": "F:\\tmp\\a.txt"}
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_function_text_tool_call_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(
+        FunctionTextToolCallProvider(),
+        registry,
+        project_path=str(tmp_path),
+    )
+
+    events = [event async for event in agent.run_stream(session, "please run a command")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "Read(" not in visible_text
+    assert tool.calls == 1
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls[0].name == "Read"
+    assert assistant_tool_calls[0].arguments == {"file_path": "F:\\tmp\\fn.txt"}
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_executes_dsml_tool_call_without_leaking_markup(tmp_path: Path):
     registry = ToolRegistry()
     tool = GlobCountingTool(output="glob result")
@@ -664,6 +880,44 @@ async def test_agent_loop_executes_dsml_tool_call_without_leaking_markup(tmp_pat
         "path": "F:\\_WorkSpace\\Projects\\Coomi",
     }
     assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_recovers_from_malformed_text_tool_call(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(MalformedThenValidTextToolProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please read a file")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "missing-close" not in visible_text
+    assert "Malformed text tool call detected" in "\n".join(
+        msg.content or "" for msg in session.messages if msg.role == "tool"
+    )
+    assert tool.calls == 1
+    assert any(msg.role == "tool" and msg.content == "read result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_stops_repeated_malformed_text_tool_calls(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    provider = AlwaysMalformedTextToolProvider()
+    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please read a file")]
+
+    assert provider.calls == 3
+    assert tool.calls == 0
+    assert any(
+        getattr(event, "message", "").startswith("Stopped malformed text tool-call recovery")
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

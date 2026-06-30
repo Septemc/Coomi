@@ -42,6 +42,7 @@ MAX_SAME_TOOL_CALL = 3         # 同一工具同一参数连续调用上限
 LOOP_WARN_THRESHOLD = 3        # 循环检测警告阈值
 LOOP_FORCE_BREAK_THRESHOLD = 5 # 循环检测强制中断阈值
 MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
+MAX_MALFORMED_TEXT_TOOL_RETRIES = 3
 
 _TOOL_INTENT_HINTS = (
     "file",
@@ -382,6 +383,8 @@ class AgentLoop:
         total_tool_errors = 0         # 总工具错误次数
         omit_tools_for_first_turn = _should_omit_tools_for_input(user_input)
 
+        malformed_text_tool_retries = 0
+
         while effective_iteration < MAX_ITERATIONS:
             # 取消检查点
             if self._cancel_token.is_cancelled:
@@ -477,6 +480,7 @@ class AgentLoop:
                 )
 
                 force_break = False
+                stop_for_malformed_text_tools = False
 
                 for batch in self._partition_tool_calls(tool_calls):
                     for tool_call in batch:
@@ -506,6 +510,15 @@ class AgentLoop:
                         if is_error:
                             total_tool_errors += 1
                             consecutive_failures += 1
+                            if tool_call.source == "text_fallback" and tool_call.parse_error:
+                                malformed_text_tool_retries += 1
+                                if malformed_text_tool_retries >= MAX_MALFORMED_TEXT_TOOL_RETRIES:
+                                    stop_for_malformed_text_tools = True
+                                    result_text += (
+                                        "\n\nCoomi stopped retrying malformed text tool calls "
+                                        f"after {malformed_text_tool_retries} consecutive attempts. "
+                                        "Please continue with a normal response or use a valid native tool call."
+                                    )
 
                             # 注入循环检测警告
                             warning = self._build_loop_warning(
@@ -536,6 +549,7 @@ class AgentLoop:
                         else:
                             # 工具成功 → 重置连续失败计数
                             consecutive_failures = 0
+                            malformed_text_tool_retries = 0
 
                         yield ToolDone(
                             tool_name=tool_call.name,
@@ -544,6 +558,11 @@ class AgentLoop:
                             is_error=is_error,
                         )
                         add_tool_result(session, tool_call.id, result_text)
+                        if stop_for_malformed_text_tools:
+                            break
+
+                    if stop_for_malformed_text_tools:
+                        break
 
                 # 工具执行后取消检查
                 if self._cancel_token.is_cancelled:
@@ -551,6 +570,16 @@ class AgentLoop:
                     return
 
                 # ---- 强制中断处理 ----
+                if stop_for_malformed_text_tools:
+                    yield AgentError(
+                        message=(
+                            "Stopped malformed text tool-call recovery after repeated invalid "
+                            f"formats ({malformed_text_tool_retries} attempts)."
+                        ),
+                        is_fatal=False,
+                    )
+                    return
+
                 if force_break:
                     # 强制中断：不继续工具调用，让 LLM 重新思考
                     # 不退出 run_stream，而是让 LLM 在下一轮迭代中看到 break 消息

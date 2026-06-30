@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..security import HookSystem, PermissionLevel, PermissionSystem
+from ..services.llm.text_tool_calls import MALFORMED_TEXT_TOOL_CALL_NAME
 from ..tools.base import BaseTool, ToolAccess, ToolResult
 from ..tools.registry import ToolRegistry
 from ..types import Session, ToolCall
@@ -60,16 +61,20 @@ class ToolExecutor:
             tool_call = replace(tool_call, name=canonical_name)
 
         if tool_call.parse_error:
+            if tool_call.source == "text_fallback" and tool_call.name == MALFORMED_TEXT_TOOL_CALL_NAME:
+                error = tool_call.parse_error
+            else:
+                error = (
+                    f"Invalid JSON arguments for tool '{tool_call.name}': {tool_call.parse_error}. "
+                    "The tool was not executed. Retry with valid JSON arguments."
+                )
             return self._outcome(
                 session,
                 tool_call,
                 result=ToolResult(
                     success=False,
                     output="",
-                    error=(
-                        f"Invalid JSON arguments for tool '{tool_call.name}': {tool_call.parse_error}. "
-                        "The tool was not executed. Retry with valid JSON arguments."
-                    ),
+                    error=error,
                 ),
                 start=start,
                 persist=False,

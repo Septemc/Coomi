@@ -15,6 +15,44 @@ TEXT_TOOL_MODES = {
     TEXT_TOOL_MODE_STRUCTURED,
     TEXT_TOOL_MODE_MIMO,
 }
+MALFORMED_TEXT_TOOL_CALL_NAME = "InvalidToolCall"
+MALFORMED_TEXT_TOOL_CALL_CORRECTION = """Malformed text tool call detected.
+
+Coomi could not execute your previous tool call because its text format was invalid.
+Regenerate exactly one complete, parseable tool call. Do not explain the error and do not
+emit the tool call as ordinary prose.
+
+Supported examples:
+
+XML:
+<tool_call>
+<function=Read>
+<parameter=file_path>F:\\path\\file.txt
+</tool_call>
+
+DSML:
+<| | DSML | | tool_calls>
+<| | DSML | | invoke name="Read">
+<| | DSML | | parameter name="file_path" string="true">F:\\path\\file.txt</| | DSML | | parameter>
+</| | DSML | | invoke>
+</| | DSML | | tool_calls>
+
+JSON:
+{"name":"Read","arguments":{"file_path":"F:\\\\path\\\\file.txt"}}
+
+Common required parameters:
+Read: file_path
+Edit: file_path, old_string, new_string
+Write: file_path, content
+Bash: command
+PowerShell: command
+Glob: pattern, path
+Grep: pattern, path
+WebSearch: query
+WebFetch: url
+TodoWrite: todos
+AskUserQuestion: questions
+"""
 
 _TOOL_BLOCK_TAGS = ("tool_call", "tool_code")
 _DIRECT_TOOL_TAGS = (
@@ -44,6 +82,50 @@ _DIRECT_TOOL_TAGS = (
 )
 _SINGLE_TOOL_TAGS = _DIRECT_TOOL_TAGS
 _MIMO_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
+_KNOWN_TOOL_NAME_ALIASES = {
+    "read",
+    "readfile",
+    "openfile",
+    "cat",
+    "edit",
+    "editfile",
+    "write",
+    "writefile",
+    "bash",
+    "shell",
+    "runcommand",
+    "powershell",
+    "pwsh",
+    "glob",
+    "listfiles",
+    "findfiles",
+    "grep",
+    "search",
+    "searchcontent",
+    "searchfiles",
+    "websearch",
+    "searchweb",
+    "webfetch",
+    "fetch",
+    "fetchurl",
+    "todowrite",
+    "todo",
+    "askuserquestion",
+    "askuser",
+    "planmode",
+    "enterplanmode",
+    "exitplanmode",
+}
+_STRUCTURE_HINT_PATTERN = re.compile(
+    r"tool_calls?|tool_code|function_call|function\s*=|invoke\b|parameter\b|"
+    r"arguments\b|input\b|name\s*=|tool\s*=|<\s*\|\s*\|\s*dsml\s*\|\s*\|",
+    re.IGNORECASE,
+)
+_FENCE_START_PATTERN = re.compile(r"```\s*(?:json|xml|tool|tools|tool_call)\b", re.IGNORECASE)
+_FUNCTION_CALL_START_PATTERN = re.compile(
+    r"\b([A-Za-z_][\w.]*)\s*\(",
+    re.DOTALL,
+)
 
 _FUNCTION_PATTERNS = (
     re.compile(r"<\s*function\s*=\s*['\"]?([^'\">\s]+)['\"]?\s*>", re.IGNORECASE),
@@ -100,7 +182,14 @@ class TextToolCallFilter:
                     continue
 
                 _, end_index = end_span
-                tool_calls.extend(parse_text_tool_calls(combined[:end_index], mode=self.mode))
+                raw_call = combined[:end_index]
+                parsed_calls = parse_text_tool_calls(raw_call, mode=self.mode)
+                if parsed_calls:
+                    tool_calls.extend(parsed_calls)
+                elif is_likely_text_tool_call(raw_call, mode=self.mode):
+                    tool_calls.append(_build_malformed_text_tool_call(raw_call))
+                else:
+                    visible_parts.append(raw_call)
                 self._tool_buffer = ""
                 self._in_tool_call = False
                 self._tool_tag = None
@@ -140,11 +229,17 @@ class TextToolCallFilter:
             parsed_tool_calls = parse_text_tool_calls(self._tool_buffer, mode=self.mode)
             if parsed_tool_calls:
                 for tool_call in parsed_tool_calls:
-                    tool_call["parse_error"] = (
-                        "Textual tool call was not closed with the expected closing tag. "
-                        "The tool was not executed. Retry with a complete tool call."
+                    tool_call["parse_error"] = _format_malformed_text_tool_call_error(
+                        "The text tool call was not closed with the expected closing tag."
                     )
                 tool_calls.extend(parsed_tool_calls)
+            elif is_likely_text_tool_call(self._tool_buffer, mode=self.mode):
+                tool_calls.append(
+                    _build_malformed_text_tool_call(
+                        self._tool_buffer,
+                        reason="The text tool call was incomplete or syntactically invalid.",
+                    )
+                )
             else:
                 visible += self._tool_buffer
             self._tool_buffer = ""
@@ -181,10 +276,50 @@ def parse_text_tool_calls(
     mode = normalize_text_tool_mode(mode)
     if mode == TEXT_TOOL_MODE_DISABLED:
         return []
+    raw = _strip_code_fence(raw.strip())
+    if not raw:
+        return []
     if _contains_dsml_tool_call(raw):
-        return _parse_dsml_tool_calls(raw)
+        calls = _parse_dsml_tool_calls(raw)
+        return calls or [_build_malformed_text_tool_call(raw)]
     tool_call = parse_text_tool_call(raw, mode=mode)
     return [tool_call] if tool_call else []
+
+
+def is_likely_text_tool_call(
+    text: str | None,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> bool:
+    """Return True when text has enough structure to be treated as a tool-call attempt."""
+    if not text or normalize_text_tool_mode(mode) == TEXT_TOOL_MODE_DISABLED:
+        return False
+
+    stripped = _strip_code_fence(text.strip())
+    if not stripped:
+        return False
+
+    lowered = stripped.casefold()
+    if _contains_dsml_tool_call(stripped):
+        return True
+    fence_match = _FENCE_START_PATTERN.search(text)
+    if fence_match:
+        newline = text.find("\n", fence_match.end())
+        if newline == -1:
+            return True
+        fenced_body = text[newline + 1:]
+        return True if "```" not in fenced_body else is_likely_text_tool_call(stripped, mode=mode)
+    if re.search(r"<\s*/?\s*(tool_call|tool_code|function|parameter)\b", stripped, re.IGNORECASE):
+        return True
+    if re.search(r"<\s*(function|parameter)\s*=", stripped, re.IGNORECASE):
+        return True
+    if _looks_like_json_tool_call(stripped, allow_partial=True):
+        return True
+    if _looks_like_function_tool_call(stripped, allow_partial=True):
+        return True
+
+    structure_score = 1 if _STRUCTURE_HINT_PATTERN.search(stripped) else 0
+    tool_score = 1 if any(alias in _normalize_name(lowered) for alias in _KNOWN_TOOL_NAME_ALIASES) else 0
+    return bool(structure_score and tool_score)
 
 
 def parse_text_tool_call(
@@ -196,13 +331,13 @@ def parse_text_tool_call(
     if mode == TEXT_TOOL_MODE_DISABLED:
         return None
 
-    raw = raw.strip()
+    raw = _strip_code_fence(raw.strip())
     if not raw:
         return None
 
     if _contains_dsml_tool_call(raw):
         calls = _parse_dsml_tool_calls(raw)
-        return calls[0] if calls else None
+        return calls[0] if calls else _build_malformed_text_tool_call(raw)
 
     tag = _opening_tag_name(raw)
     if tag == "tool_code":
@@ -215,6 +350,17 @@ def parse_text_tool_call(
     json_call = _parse_json_tool_call(raw)
     if json_call:
         return json_call
+    if raw.startswith("{") and _looks_like_json_tool_call(raw, allow_partial=True):
+        return _build_malformed_text_tool_call(raw, reason="The JSON text tool call is invalid.")
+
+    function_call = _parse_function_style_tool_call(raw)
+    if function_call:
+        return function_call
+    if _looks_like_function_tool_call(raw, allow_partial=True):
+        return _build_malformed_text_tool_call(
+            raw,
+            reason="The function-style text tool call is incomplete or invalid.",
+        )
 
     name = _extract_function_name(raw)
     if not name:
@@ -338,6 +484,27 @@ def _find_tool_end(text: str, tag: str) -> tuple[int, int] | None:
     if tag.startswith("dsml:"):
         match = _find_dsml_tag(text, tag.removeprefix("dsml:"), closing=True)
         return (match.start(), match.end()) if match else None
+    if tag == "fence":
+        first_line_end = text.find("\n")
+        if first_line_end == -1:
+            return None
+        closing = text.find("```", first_line_end + 1)
+        if closing == -1:
+            return None
+        return closing, closing + len("```")
+    if tag == "json":
+        end = _balanced_span_end(text, 0, "{", "}")
+        return (end - 1, end) if end is not None else None
+    if tag == "function_call":
+        match = _FUNCTION_CALL_START_PATTERN.search(text)
+        if not match:
+            return None
+        end = _balanced_span_end(text, match.end() - 1, "(", ")")
+        if end is None:
+            return None
+        while end < len(text) and text[end] == ";":
+            end += 1
+        return end - 1, end
 
     lower = text.lower()
     end_tag = f"</{tag}>"
@@ -470,7 +637,9 @@ def _parse_json_tool_call(raw: str) -> dict[str, Any] | None:
             {},
             raw,
             call_id=str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
-            parse_error="Textual JSON tool call arguments must be an object.",
+            parse_error=_format_malformed_text_tool_call_error(
+                "Textual JSON tool call arguments must be an object."
+            ),
         )
 
     return _build_text_tool_call(
@@ -479,6 +648,51 @@ def _parse_json_tool_call(raw: str) -> dict[str, Any] | None:
         raw,
         call_id=str(data.get("id") or f"text_call_{uuid.uuid4().hex[:12]}"),
     )
+
+
+def _parse_function_style_tool_call(raw: str) -> dict[str, Any] | None:
+    parsed = _parse_function_call_text(raw)
+    if parsed is None:
+        return None
+    name, positional, keyword = parsed
+    if not _is_known_tool_name(name):
+        return None
+    arguments = _arguments_from_function_call(name, positional, keyword)
+    return _build_text_tool_call(name, arguments, raw)
+
+
+def _looks_like_json_tool_call(raw: str, allow_partial: bool = False) -> bool:
+    stripped = raw.strip()
+    if not stripped.startswith("{"):
+        return False
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        return allow_partial and bool(
+            re.search(r'"(?:name|tool|function)"\s*:', stripped, re.IGNORECASE)
+            or re.search(r'"(?:arguments|input|parameters)"\s*:', stripped, re.IGNORECASE)
+        )
+    if not isinstance(data, dict):
+        return False
+    name = data.get("name") or data.get("tool") or data.get("function")
+    if isinstance(name, dict):
+        name = name.get("name")
+    has_name = isinstance(name, str) and _is_known_tool_name(name)
+    has_args = any(key in data for key in ("arguments", "input", "parameters"))
+    return bool(has_name and has_args)
+
+
+def _looks_like_function_tool_call(raw: str, allow_partial: bool = False) -> bool:
+    stripped = _strip_code_fence(raw.strip())
+    match = _FUNCTION_CALL_START_PATTERN.search(stripped)
+    if not match:
+        return False
+    name = match.group(1).split(".")[-1]
+    if not _is_known_tool_name(name):
+        return False
+    if allow_partial:
+        return True
+    return _balanced_span_end(stripped, match.end() - 1, "(", ")") is not None
 
 
 def _extract_function_name(raw: str) -> str | None:
@@ -740,6 +954,21 @@ def _build_text_tool_call(
     }
 
 
+def _build_malformed_text_tool_call(raw: str, reason: str | None = None) -> dict[str, Any]:
+    return _build_text_tool_call(
+        MALFORMED_TEXT_TOOL_CALL_NAME,
+        {},
+        raw,
+        parse_error=_format_malformed_text_tool_call_error(reason),
+    )
+
+
+def _format_malformed_text_tool_call_error(reason: str | None = None) -> str:
+    if reason:
+        return f"{reason}\n\n{MALFORMED_TEXT_TOOL_CALL_CORRECTION}"
+    return MALFORMED_TEXT_TOOL_CALL_CORRECTION
+
+
 def _tool_start_tags_for_mode(mode: str) -> tuple[str, ...]:
     if mode == TEXT_TOOL_MODE_DISABLED:
         return ()
@@ -769,6 +998,9 @@ def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] |
     dsml_match = _find_next_dsml_tool_start(text)
     if dsml_match is not None and (best is None or dsml_match[0] < best[0]):
         best = dsml_match
+    generic_match = _find_next_generic_tool_start(text)
+    if generic_match is not None and (best is None or generic_match[0] < best[0]):
+        best = generic_match
     return best
 
 
@@ -786,6 +1018,32 @@ def _find_next_dsml_tool_start(text: str) -> tuple[int, str] | None:
     return best
 
 
+def _find_next_generic_tool_start(text: str) -> tuple[int, str] | None:
+    best: tuple[int, str] | None = None
+    fence = _FENCE_START_PATTERN.search(text)
+    if fence and is_likely_text_tool_call(text[fence.start():], mode=TEXT_TOOL_MODE_STRUCTURED):
+        best = (fence.start(), "fence")
+
+    for match in re.finditer(r"\{", text):
+        candidate = text[match.start():]
+        if _looks_like_json_tool_call(candidate, allow_partial=True):
+            item = (match.start(), "json")
+            if best is None or item[0] < best[0]:
+                best = item
+            break
+
+    for match in _FUNCTION_CALL_START_PATTERN.finditer(text):
+        name = match.group(1).split(".")[-1]
+        if not _is_known_tool_name(name):
+            continue
+        item = (match.start(), "function_call")
+        if best is None or item[0] < best[0]:
+            best = item
+        break
+
+    return best
+
+
 def _possible_start_prefix_len(text: str, tags: tuple[str, ...]) -> int:
     if not tags:
         return 0
@@ -797,7 +1055,7 @@ def _possible_start_prefix_len(text: str, tags: tuple[str, ...]) -> int:
         if any(f"<{tag}".startswith(suffix) for tag in tags):
             xml_keep = size
             break
-    return max(xml_keep, _possible_dsml_start_prefix_len(text))
+    return max(xml_keep, _possible_dsml_start_prefix_len(text), _possible_generic_start_prefix_len(text))
 
 
 def _possible_dsml_start_prefix_len(text: str) -> int:
@@ -815,6 +1073,49 @@ def _possible_dsml_start_prefix_len(text: str) -> int:
 
 def _compact_dsml_marker(text: str) -> str:
     return re.sub(r"\s+", "", text).casefold().replace("\uff5c", "|")
+
+
+def _possible_generic_start_prefix_len(text: str) -> int:
+    starts = ["```json", "```xml", "```tool", "{"]
+    lower = text.casefold()
+    max_len = min(32, len(text))
+    for size in range(max_len, 0, -1):
+        suffix = lower[-size:]
+        compact_suffix = re.sub(r"\s+", "", suffix)
+        if any(start.startswith(compact_suffix) for start in starts):
+            return size
+    return 0
+
+
+def _balanced_span_end(text: str, open_index: int, open_char: str, close_char: str) -> int | None:
+    quote: str | None = None
+    escape = False
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if quote:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        if char == open_char:
+            depth += 1
+            continue
+        if char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _is_known_tool_name(name: str) -> bool:
+    return _normalize_name(name) in _KNOWN_TOOL_NAME_ALIASES
 
 
 def _normalize_name(name: str) -> str:
