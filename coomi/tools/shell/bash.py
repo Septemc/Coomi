@@ -46,7 +46,10 @@ class BashTool(BaseTool):
     """执行 Shell 命令"""
 
     name = "Bash"
-    description = "Executes a given bash command and returns its output."
+    description = (
+        "Executes a bash/sh command and returns its output. On Windows, prefer the "
+        "PowerShell tool for Windows paths, file operations, cmdlets, and cmd.exe syntax."
+    )
     access = ToolAccess.WRITE
     concurrency = ToolConcurrency.BLOCKING
     requires_confirmation = False
@@ -57,7 +60,7 @@ class BashTool(BaseTool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The bash command to execute",
+                    "description": "The bash/sh command to execute; do not use Windows cmd.exe or PowerShell syntax here",
                 },
                 "timeout": {
                     "type": "number",

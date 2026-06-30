@@ -11,11 +11,13 @@ from coomi.engine.tool_executor import ToolExecutor, _summarize_arguments
 from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
 from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
+from coomi.services.llm.config import ProviderConfig
 from coomi.services.llm.generic import ThinkingTagFilter, _strip_thinking_tags
 from coomi.services.llm.provider import LLMProvider
 from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
-from coomi.tools.registry import ToolRegistry
+from coomi.tools.registry import ToolRegistry, create_default_registry
+from coomi.tools.shell import BashTool, PowerShellTool
 from coomi.tools.user import AskUserQuestionTool
 from coomi.ui.events import TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
@@ -248,6 +250,22 @@ class DsmlToolCallProvider(LLMProvider):
 
     def get_text_tool_mode(self) -> str:
         return "structured"
+
+
+class NativeConfiguredDsmlProvider(DsmlToolCallProvider):
+    def __init__(self):
+        super().__init__()
+        self.config = ProviderConfig(
+            id="native-generic",
+            type="generic",
+            display="Native Generic",
+            api_key="test",
+            model="native-model",
+            tool_protocol="native",
+        )
+
+    def get_text_tool_mode(self) -> str:
+        return LLMProvider.get_text_tool_mode(self)
 
 
 class JsonTextToolCallProvider(LLMProvider):
@@ -679,6 +697,52 @@ def test_text_tool_call_filter_parses_dsml_tool_calls_without_leaking_markup():
     }
 
 
+def test_text_tool_call_filter_parses_screenshot_bash_dsml_and_variants():
+    screenshot_call = (
+        '<| | DSML | | tool_calls><| | DSML | | invoke name="Bash">'
+        '<| | DSML | | parameter name="command" string="true">'
+        'cd "F:\\_WorkSpace\\Projects\\TensorHub" && for %f in '
+        '(assets\\tensorhub.png assets\\tensorhub_icon.png) do @echo %~nxf: %~zf bytes'
+        '</| | DSML | | parameter>'
+        '<| | DSML | | parameter name="description" string="true">Check image file sizes'
+        '</| | DSML | | parameter></| | DSML | | invoke></| | DSML | | tool_calls>'
+    )
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed(screenshot_call)
+
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Bash"
+    assert calls[0]["source"] == "text_fallback"
+    assert calls[0]["parse_error"] is None
+    assert calls[0]["arguments"] == {
+        "command": (
+            'cd "F:\\_WorkSpace\\Projects\\TensorHub" && for %f in '
+            "(assets\\tensorhub.png assets\\tensorhub_icon.png) do @echo %~nxf: %~zf bytes"
+        ),
+        "description": "Check image file sizes",
+    }
+
+    for raw in (
+        '<||DSML||tool_calls><||DSML||invoke name="Read">'
+        '<||DSML||parameter name="file_path" string="true">F:\\tmp\\a.txt'
+        '</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>',
+        '< | | DSML | | tool_calls >< | | DSML | | invoke name="Read" >'
+        '< | | DSML | | parameter name="file_path" string="true" >F:\\tmp\\b.txt'
+        '</ | | DSML | | parameter ></ | | DSML | | invoke ></ | | DSML | | tool_calls >',
+        '<\uff5c \uff5c DSML \uff5c \uff5c tool_calls><\uff5c \uff5c DSML \uff5c \uff5c invoke name="Read">'
+        '<\uff5c \uff5c DSML \uff5c \uff5c parameter name="file_path" string="true">F:\\tmp\\c.txt'
+        '</\uff5c \uff5c DSML \uff5c \uff5c parameter></\uff5c \uff5c DSML \uff5c \uff5c invoke>'
+        '</\uff5c \uff5c DSML \uff5c \uff5c tool_calls>',
+    ):
+        variant_filter = TextToolCallFilter()
+        visible, calls = variant_filter.feed(raw)
+        assert visible == ""
+        assert len(calls) == 1
+        assert calls[0]["name"] == "Read"
+        assert calls[0]["arguments"]["file_path"].startswith("F:\\tmp\\")
+
+
 def test_text_tool_call_filter_parses_json_function_and_fenced_calls():
     json_filter = TextToolCallFilter()
     visible, calls = json_filter.feed(
@@ -738,6 +802,51 @@ def test_text_tool_call_filter_does_not_misread_plain_language():
         "I can read the plan, edit the summary, and search later without using a tool."
     )
     assert calls + tail_calls == []
+
+
+def test_provider_text_fallback_stays_enabled_for_native_protocol():
+    native = ProviderConfig(
+        id="native",
+        type="generic",
+        display="Native",
+        api_key="test",
+        model="native-model",
+        tool_protocol="native",
+    )
+    disabled = ProviderConfig(
+        id="disabled",
+        type="generic",
+        display="Disabled",
+        api_key="test",
+        model="disabled-model",
+        tool_protocol="disabled",
+    )
+
+    assert native.resolved_tool_protocol() == "native"
+    assert native.text_tool_mode() == "structured"
+    assert disabled.text_tool_mode() == "disabled"
+
+
+def test_default_registry_contains_core_tools_and_aliases():
+    registry = create_default_registry()
+
+    assert registry.get("Bash") is not None
+    assert registry.get("PowerShell") is not None
+    assert registry.get("Read") is not None
+    assert registry.get("Edit") is not None
+    assert registry.canonical_name("bash") == "Bash"
+    assert registry.canonical_name("pwsh") == "PowerShell"
+    assert registry.canonical_name("read_file") == "Read"
+    assert registry.canonical_name("editfile") == "Edit"
+
+
+def test_shell_tool_descriptions_route_windows_commands_to_powershell():
+    bash = BashTool()
+    powershell = PowerShellTool()
+
+    assert "PowerShell" in bash.description
+    assert "Windows" in bash.description
+    assert "preferred on Windows" in powershell.get_parameters_schema()["properties"]["command"]["description"]
 
 
 @pytest.mark.asyncio
@@ -880,6 +989,48 @@ async def test_agent_loop_executes_dsml_tool_call_without_leaking_markup(tmp_pat
         "path": "F:\\_WorkSpace\\Projects\\Coomi",
     }
     assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_captures_dsml_when_provider_protocol_is_native(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(NativeConfiguredDsmlProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please search project files")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "DSML" not in visible_text
+    assert tool.calls == 1
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls[0].name == "Glob"
+    assert assistant_tool_calls[0].source == "text_fallback"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_logs_when_text_tool_mode_disabled_but_content_looks_like_tool(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(DisabledTextToolCodeProvider(), registry, project_path=str(tmp_path))
+
+    with caplog.at_level("WARNING", logger="coomi.engine.loop"):
+        events = [event async for event in agent.run_stream(session, "please search project files")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_code>" in visible_text
+    assert tool.calls == 0
+    assert "Text tool parsing is disabled" in caplog.text
 
 
 @pytest.mark.asyncio

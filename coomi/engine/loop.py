@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any, AsyncIterator
 
 from ..security import HookSystem, PermissionLevel, PermissionSystem
 from ..services.context.compressor import ContextCompressor
 from ..services.llm.provider import LLMProvider
-from ..services.llm.text_tool_calls import TextToolCallFilter
+from ..services.llm.text_tool_calls import TextToolCallFilter, is_likely_text_tool_call
 from ..tools.base import ToolConcurrency
 from ..tools.registry import ToolRegistry
 from ..types import ToolCall
@@ -43,6 +44,7 @@ LOOP_WARN_THRESHOLD = 3        # 循环检测警告阈值
 LOOP_FORCE_BREAK_THRESHOLD = 5 # 循环检测强制中断阈值
 MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
 MAX_MALFORMED_TEXT_TOOL_RETRIES = 3
+logger = logging.getLogger(__name__)
 
 _TOOL_INTENT_HINTS = (
     "file",
@@ -421,6 +423,11 @@ class AgentLoop:
                             arguments={},
                         )
                     elif chunk["type"] == "content":
+                        if text_tool_mode == "disabled" and is_likely_text_tool_call(chunk["content"]):
+                            logger.warning(
+                                "Text tool parsing is disabled while model content looks like a tool call. "
+                                "Check provider tool_protocol/text_tool_mode configuration."
+                            )
                         visible_content, parsed_text_calls = text_tool_filter.feed(chunk["content"])
                         tool_calls_data.extend(parsed_text_calls)
                         if visible_content:

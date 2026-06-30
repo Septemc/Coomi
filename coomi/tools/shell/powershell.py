@@ -32,7 +32,10 @@ class PowerShellTool(BaseTool):
     """执行 PowerShell 命令"""
 
     name = "PowerShell"
-    description = "Executes a given PowerShell command and returns its output."
+    description = (
+        "Executes a PowerShell command and returns its output. Prefer this tool on "
+        "Windows for file operations, Windows paths, cmdlets, and cmd.exe-style tasks."
+    )
     access = ToolAccess.WRITE
     concurrency = ToolConcurrency.BLOCKING
     requires_confirmation = False
@@ -43,7 +46,7 @@ class PowerShellTool(BaseTool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The PowerShell command to execute",
+                    "description": "The PowerShell command to execute; preferred on Windows for filesystem and shell tasks",
                 },
                 "timeout": {
                     "type": "number",

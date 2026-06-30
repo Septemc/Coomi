@@ -125,6 +125,6 @@ def test_provider_tool_protocol_auto_infers_text_modes():
     assert mimo.resolved_tool_protocol() == "mimo"
     assert mimo.text_tool_mode() == "mimo"
     assert minimax.resolved_tool_protocol() == "native"
-    assert minimax.text_tool_mode() == "disabled"
+    assert minimax.text_tool_mode() == "structured"
     assert generic.resolved_tool_protocol() == "structured"
     assert generic.text_tool_mode() == "structured"

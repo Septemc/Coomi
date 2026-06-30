@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any
 
+
+logger = logging.getLogger(__name__)
 
 TEXT_TOOL_MODE_DISABLED = "disabled"
 TEXT_TOOL_MODE_STRUCTURED = "structured"
@@ -185,6 +188,13 @@ class TextToolCallFilter:
                 raw_call = combined[:end_index]
                 parsed_calls = parse_text_tool_calls(raw_call, mode=self.mode)
                 if parsed_calls:
+                    for tool_call in parsed_calls:
+                        logger.debug(
+                            "Parsed textual tool call name=%s source=%s parse_error=%s",
+                            tool_call.get("name"),
+                            tool_call.get("source", "text_fallback"),
+                            bool(tool_call.get("parse_error")),
+                        )
                     tool_calls.extend(parsed_calls)
                 elif is_likely_text_tool_call(raw_call, mode=self.mode):
                     tool_calls.append(_build_malformed_text_tool_call(raw_call))
@@ -208,6 +218,7 @@ class TextToolCallFilter:
                 continue
 
             start, tag = match
+            logger.debug("Detected textual tool-call candidate tag=%s", tag)
             visible_parts.append(text[:start])
             self._tool_buffer = ""
             self._in_tool_call = True

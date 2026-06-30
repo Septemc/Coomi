@@ -113,11 +113,11 @@ class ProviderConfig:
 
     def text_tool_mode(self) -> str:
         protocol = self.resolved_tool_protocol()
+        if protocol == "disabled":
+            return "disabled"
         if protocol == "mimo":
             return "mimo"
-        if protocol == "structured":
-            return "structured"
-        return "disabled"
+        return "structured"
 
 
 def _normalize_tool_protocol(value: object) -> str:
