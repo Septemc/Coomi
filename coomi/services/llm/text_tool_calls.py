@@ -442,7 +442,8 @@ def _extract_dsml_parameters(body: str) -> dict[str, Any]:
         name = (attrs.get("name") or attrs.get("parameter") or "").strip()
         if not name:
             continue
-        arguments[name] = _coerce_dsml_parameter_value(value_text.strip(), attrs)
+        value = value_text if _attribute_is_true(attrs, "string") else value_text.strip()
+        arguments[name] = _coerce_dsml_parameter_value(value, attrs)
 
     return arguments
 
@@ -938,7 +939,6 @@ def _coerce_parameter_value(value: str) -> Any:
 
 
 def _strip_quotes_preserving_backslashes(value: str) -> str:
-    value = value.strip()
     if len(value) < 2:
         return value
     quote = value[0]

@@ -45,6 +45,13 @@ class EditTool(BaseTool):
         new_string = arguments["new_string"]
         replace_all = arguments.get("replace_all", False)
 
+        if old_string == "":
+            return ToolResult(
+                success=False,
+                output="",
+                error="old_string must not be empty. Read the file and provide the exact text to replace.",
+            )
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()

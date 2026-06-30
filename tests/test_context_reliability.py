@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from coomi.engine.loop import AgentLoop
+from coomi.engine.loop import AgentLoop, _should_omit_tools_for_input
 from coomi.engine.loop_runner import _step_completion_confirmed
 from coomi.engine.tool_executor import ToolExecutor, _summarize_arguments
 from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
@@ -17,9 +17,10 @@ from coomi.services.llm.provider import LLMProvider
 from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry, create_default_registry
+from coomi.tools.file_ops.edit import EditTool
 from coomi.tools.shell import BashTool, PowerShellTool
 from coomi.tools.user import AskUserQuestionTool
-from coomi.ui.events import TextChunk
+from coomi.ui.events import ReasoningChunk, TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
 
@@ -266,6 +267,24 @@ class NativeConfiguredDsmlProvider(DsmlToolCallProvider):
 
     def get_text_tool_mode(self) -> str:
         return LLMProvider.get_text_tool_mode(self)
+
+
+class ReasoningDsmlToolCallProvider(DsmlToolCallProvider):
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {"type": "reasoning_content", "content": "Thinking <| | DSML | | tool"}
+            yield {
+                "type": "reasoning_content",
+                "content": (
+                    '_calls><| | DSML | | invoke name="Glob">'
+                    '<| | DSML | | parameter name="pattern" string="true">**/*.py'
+                    '</| | DSML | | parameter>'
+                    '</| | DSML | | invoke></| | DSML | | tool_calls>'
+                ),
+            }
+        else:
+            yield {"type": "content", "content": "done"}
 
 
 class JsonTextToolCallProvider(LLMProvider):
@@ -697,6 +716,27 @@ def test_text_tool_call_filter_parses_dsml_tool_calls_without_leaking_markup():
     }
 
 
+def test_text_tool_call_filter_preserves_dsml_string_whitespace():
+    stream_filter = TextToolCallFilter()
+    visible, calls = stream_filter.feed(
+        '<| | DSML | | tool_calls><| | DSML | | invoke name="Edit">'
+        '<| | DSML | | parameter name="file_path" string="true">F:\\tmp\\index.html'
+        '</| | DSML | | parameter>'
+        '<| | DSML | | parameter name="old_string" string="true">    <link rel="icon" '
+        'href="assets/tensorhub.png" type="image/png">'
+        '</| | DSML | | parameter>'
+        '<| | DSML | | parameter name="new_string" string="true">    <link rel="icon" '
+        'href="assets/tensorhub_icon.png" type="image/png">'
+        '</| | DSML | | parameter>'
+        '</| | DSML | | invoke></| | DSML | | tool_calls>'
+    )
+
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0]["arguments"]["old_string"].startswith("    <link")
+    assert calls[0]["arguments"]["new_string"].startswith("    <link")
+
+
 def test_text_tool_call_filter_parses_screenshot_bash_dsml_and_variants():
     screenshot_call = (
         '<| | DSML | | tool_calls><| | DSML | | invoke name="Bash">'
@@ -827,6 +867,12 @@ def test_provider_text_fallback_stays_enabled_for_native_protocol():
     assert disabled.text_tool_mode() == "disabled"
 
 
+def test_short_visual_edit_prompts_keep_tools_available():
+    assert not _should_omit_tools_for_input("\u6536\u85cf\u5939\u56fe\u6807\u6211\u9700\u8981\u4f7f\u7528\u5706\u89d2\u56fe\u6807")
+    assert not _should_omit_tools_for_input("\u5c06\u6536\u85cf\u5939\u56fe\u6807\u8bbe\u8ba1\u4e3a\u5706\u89d2\u56fe\u6807")
+    assert not _should_omit_tools_for_input("\u628a favicon \u6539\u6210\u5706\u89d2\u56fe\u6807")
+
+
 def test_default_registry_contains_core_tools_and_aliases():
     registry = create_default_registry()
 
@@ -838,6 +884,23 @@ def test_default_registry_contains_core_tools_and_aliases():
     assert registry.canonical_name("pwsh") == "PowerShell"
     assert registry.canonical_name("read_file") == "Read"
     assert registry.canonical_name("editfile") == "Edit"
+
+
+def test_edit_tool_rejects_empty_old_string(tmp_path: Path):
+    target = tmp_path / "index.html"
+    target.write_text("abc", encoding="utf-8")
+
+    result = EditTool().run(
+        {
+            "file_path": str(target),
+            "old_string": "",
+            "new_string": "x",
+        }
+    )
+
+    assert not result.success
+    assert "old_string must not be empty" in (result.error or "")
+    assert target.read_text(encoding="utf-8") == "abc"
 
 
 def test_shell_tool_descriptions_route_windows_commands_to_powershell():
@@ -1072,7 +1135,7 @@ async def test_agent_loop_stops_repeated_malformed_text_tool_calls(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_does_not_execute_text_tool_call_when_tools_omitted(tmp_path: Path):
+async def test_agent_loop_executes_text_tool_call_when_native_tools_omitted(tmp_path: Path):
     registry = ToolRegistry()
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
@@ -1082,9 +1145,29 @@ async def test_agent_loop_does_not_execute_text_tool_call_when_tools_omitted(tmp
     events = [event async for event in agent.run_stream(session, "hi")]
 
     visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
-    assert "<tool_code>" in visible_text
-    assert tool.calls == 0
-    assert not any(msg.role == "tool" for msg in session.messages)
+    assert "<tool_code>" not in visible_text
+    assert tool.calls == 1
+    assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_reasoning_text_tool_call_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(ReasoningDsmlToolCallProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please search project files")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    visible_reasoning = "".join(
+        event.content for event in events if isinstance(event, ReasoningChunk)
+    )
+    assert "DSML" not in visible_text
+    assert "DSML" not in visible_reasoning
+    assert tool.calls == 1
+    assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
 
 
 @pytest.mark.asyncio

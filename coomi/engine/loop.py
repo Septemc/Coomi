@@ -72,6 +72,18 @@ _TOOL_INTENT_HINTS = (
     "news",
     "latest",
     "current",
+    "style",
+    "design",
+    "icon",
+    "favicon",
+    "logo",
+    "image",
+    "asset",
+    "html",
+    "css",
+    "page",
+    "ui",
+    "replace",
     "\u6587\u4ef6",
     "\u8bfb",
     "\u5199",
@@ -96,6 +108,18 @@ _TOOL_INTENT_HINTS = (
     "\u8c03\u6574",
     "\u62a5\u9519",
     "\u9519\u8bef",
+    "\u8bbe\u8ba1",
+    "\u6837\u5f0f",
+    "\u56fe\u6807",
+    "\u6536\u85cf\u5939",
+    "\u5706\u89d2",
+    "\u9875\u9762",
+    "\u754c\u9762",
+    "\u56fe\u7247",
+    "\u7d20\u6750",
+    "\u94fe\u63a5",
+    "\u66ff\u6362",
+    "\u4f7f\u7528",
 )
 
 
@@ -395,16 +419,21 @@ class AgentLoop:
 
             effective_iteration += 1
             messages = session.get_messages_for_api()
+            available_tools = self.tool_registry.get_tool_definitions() or None
             if effective_iteration == 1 and omit_tools_for_first_turn:
                 tools = None
             else:
-                tools = self.tool_registry.get_tool_definitions() or None
+                tools = available_tools
 
             full_content = ""
             full_reasoning = ""
             tool_calls_data = []
-            text_tool_mode = self.llm.get_text_tool_mode() if tools else "disabled"
+            # Textual tool-call fallback must remain active whenever tools exist.
+            # Some providers emit DSML/XML/JSON tool calls as plain content even
+            # when the first request optimizes native tool definitions away.
+            text_tool_mode = self.llm.get_text_tool_mode() if available_tools else "disabled"
             text_tool_filter = TextToolCallFilter(mode=text_tool_mode)
+            reasoning_tool_filter = TextToolCallFilter(mode=text_tool_mode)
 
             # ---- LLM API 调用（含降级处理） ----
             try:
@@ -415,15 +444,23 @@ class AgentLoop:
                         return
 
                     if chunk["type"] == "reasoning_content":
-                        full_reasoning += chunk["content"]
-                        yield ReasoningChunk(content=chunk["content"])
+                        if text_tool_mode == "disabled" and is_likely_text_tool_call(chunk["content"], mode="structured"):
+                            logger.warning(
+                                "Text tool parsing is disabled while model reasoning looks like a tool call. "
+                                "Check provider tool_protocol/text_tool_mode configuration."
+                            )
+                        visible_reasoning, parsed_text_calls = reasoning_tool_filter.feed(chunk["content"])
+                        tool_calls_data.extend(parsed_text_calls)
+                        if visible_reasoning:
+                            full_reasoning += visible_reasoning
+                            yield ReasoningChunk(content=visible_reasoning)
                     elif chunk["type"] == "tool_call_start":
                         yield ToolStart(
                             tool_name=self._canonical_tool_name(chunk["tool_name"]),
                             arguments={},
                         )
                     elif chunk["type"] == "content":
-                        if text_tool_mode == "disabled" and is_likely_text_tool_call(chunk["content"]):
+                        if text_tool_mode == "disabled" and is_likely_text_tool_call(chunk["content"], mode="structured"):
                             logger.warning(
                                 "Text tool parsing is disabled while model content looks like a tool call. "
                                 "Check provider tool_protocol/text_tool_mode configuration."
@@ -459,6 +496,12 @@ class AgentLoop:
                     reasoning_content=full_reasoning or None,
                 )
                 return  # 正常结束当前 run，不抛异常
+
+            tail_reasoning, parsed_text_calls = reasoning_tool_filter.flush()
+            tool_calls_data.extend(parsed_text_calls)
+            if tail_reasoning:
+                full_reasoning += tail_reasoning
+                yield ReasoningChunk(content=tail_reasoning)
 
             tail_content, parsed_text_calls = text_tool_filter.flush()
             tool_calls_data.extend(parsed_text_calls)
