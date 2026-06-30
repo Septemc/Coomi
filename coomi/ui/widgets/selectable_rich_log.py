@@ -84,6 +84,8 @@ class SelectableRichLog(RichLog):
         """将屏幕坐标转换为 (line, cell_col)。"""
         if require_text:
             offset = event.get_content_offset(self)
+            if offset is None:
+                offset = event.get_content_offset_capture(self)
         else:
             offset = event.get_content_offset_capture(self)
         if offset is None:
@@ -96,18 +98,14 @@ class SelectableRichLog(RichLog):
             return None
 
         if line < 0 or line >= len(self.lines):
-            if require_text:
-                return None
             line = max(0, min(line, len(self.lines) - 1))
 
         line_text = self.lines[line].text.rstrip()
         line_cell_len = cell_len(line_text)
         if line_cell_len == 0:
-            return None
+            return line, 0
 
         col = max(0, offset.x + scroll_x)
-        if require_text and col >= line_cell_len:
-            return None
         return line, min(col, line_cell_len)
 
     def render_line(self, y: int) -> Strip:

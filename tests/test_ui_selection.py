@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import pytest
 from rich.segment import Segment
 from rich.style import Style
+from textual.app import App, ComposeResult
 from textual.strip import Strip
 
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
+
+
+class SelectionTestApp(App):
+    CSS = "#log { width: 60; height: 8; padding: 0 1; }"
+
+    def compose(self) -> ComposeResult:
+        yield SelectableRichLog(id="log", markup=True, wrap=True, highlight=True)
+
+    async def on_mount(self) -> None:
+        self.query_one("#log", SelectableRichLog).write("hello world")
 
 
 def test_slice_text_cells_handles_wide_characters():
@@ -24,6 +36,38 @@ def test_apply_highlight_uses_terminal_cell_offsets():
     assert highlighted_text == "A北京B"
     highlighted_segments = [segment for segment in highlighted._segments if segment.style]
     assert any("北京" in segment.text for segment in highlighted_segments)
+
+
+@pytest.mark.asyncio
+async def test_selectable_rich_log_left_drag_starts_from_padding():
+    app = SelectionTestApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        log = app.query_one("#log", SelectableRichLog)
+        await pilot.pause()
+
+        await pilot.mouse_down(log, offset=(0, 0), button=1)
+        await pilot.hover(log, offset=(6, 0))
+        await pilot.mouse_up(log, offset=(6, 0))
+        await pilot.pause()
+
+        assert log.has_selection()
+        assert log.get_selected_text() == "hello"
+
+
+@pytest.mark.asyncio
+async def test_selectable_rich_log_left_drag_from_trailing_space():
+    app = SelectionTestApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        log = app.query_one("#log", SelectableRichLog)
+        await pilot.pause()
+
+        await pilot.mouse_down(log, offset=(30, 0), button=1)
+        await pilot.hover(log, offset=(7, 0))
+        await pilot.mouse_up(log, offset=(7, 0))
+        await pilot.pause()
+
+        assert log.has_selection()
+        assert log.get_selected_text() == "world"
 
 
 def test_plan_panel_collects_multi_select_answers():
