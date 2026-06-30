@@ -198,6 +198,45 @@ class MimoToolCodeProvider(LLMProvider):
         return "mimo"
 
 
+class DsmlToolCallProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {"type": "content", "content": "Checking <| | DSML | | tool"}
+            yield {
+                "type": "content",
+                "content": (
+                    '_calls><| | DSML | | invoke name="Glob">'
+                    '<| | DSML | | parameter name="pattern" string="true">**/*.py'
+                    '</| | DSML | | parameter>'
+                    '<| | DSML | | parameter name="path" string="true">'
+                    'F:\\_WorkSpace\\Projects\\Coomi'
+                    '</| | DSML | | parameter>'
+                    '</| | DSML | | invoke></| | DSML | | tool_calls> done'
+                ),
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "structured"
+
+
 class DisabledTextToolCodeProvider(MimoToolCodeProvider):
     def get_text_tool_mode(self) -> str:
         return "disabled"
@@ -496,6 +535,33 @@ def test_text_tool_call_filter_parses_mimo_tool_code_and_single_tags():
     }
 
 
+def test_text_tool_call_filter_parses_dsml_tool_calls_without_leaking_markup():
+    stream_filter = TextToolCallFilter()
+    visible_1, calls_1 = stream_filter.feed("Before <| | DSML | | tool")
+    visible_2, calls_2 = stream_filter.feed(
+        '_calls><| | DSML | | invoke name="Edit">'
+        '<| | DSML | | parameter name="file_path" string="true">F:\\tmp\\index.html'
+        '</| | DSML | | parameter>'
+        '<| | DSML | | parameter name="old_string" string="true">window.x = null;'
+        '</| | DSML | | parameter>'
+        '<| | DSML | | parameter name="new_string" string="true">window.x = true;'
+        '</| | DSML | | parameter>'
+        '</| | DSML | | invoke></| | DSML | | tool_calls> after'
+    )
+
+    assert visible_1 == "Before "
+    assert calls_1 == []
+    assert visible_2 == " after"
+    assert len(calls_2) == 1
+    assert calls_2[0]["name"] == "Edit"
+    assert calls_2[0]["source"] == "text_fallback"
+    assert calls_2[0]["arguments"] == {
+        "file_path": "F:\\tmp\\index.html",
+        "old_string": "window.x = null;",
+        "new_string": "window.x = true;",
+    }
+
+
 def test_text_tool_call_filter_does_not_parse_single_tags_by_default():
     stream_filter = TextToolCallFilter()
     visible, calls = stream_filter.feed("Example: <bash>echo hello</bash> is a tag.")
@@ -566,6 +632,36 @@ async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_pat
     assert assistant_tool_calls[0].arguments == {
         "pattern": "**/*",
         "path": "F:\\_WorkSpace\\Projects\\Storyteller-App",
+    }
+    assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_dsml_tool_call_without_leaking_markup(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = GlobCountingTool(output="glob result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    agent = AgentLoop(DsmlToolCallProvider(), registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please search project files")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "DSML" not in visible_text
+    assert "invoke" not in visible_text
+    assert tool.calls == 1
+
+    assistant_tool_calls = [
+        msg.tool_calls[0]
+        for msg in session.messages
+        if msg.role == "assistant" and msg.tool_calls
+    ]
+    assert assistant_tool_calls
+    assert assistant_tool_calls[0].name == "Glob"
+    assert assistant_tool_calls[0].source == "text_fallback"
+    assert assistant_tool_calls[0].arguments == {
+        "pattern": "**/*.py",
+        "path": "F:\\_WorkSpace\\Projects\\Coomi",
     }
     assert any(msg.role == "tool" and msg.content == "glob result" for msg in session.messages)
 

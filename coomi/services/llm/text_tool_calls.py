@@ -58,6 +58,16 @@ _NAMED_PARAMETER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CLOSING_PARAMETER_PATTERN = re.compile(r"</\s*parameter\s*>", re.IGNORECASE)
+_DSML_TOOL_START_TAGS = ("tool_calls", "invoke")
+_DSML_TAG_PATTERN = re.compile(
+    r"<\s*(/?)\s*[|\uff5c]\s*[|\uff5c]\s*DSML\s*[|\uff5c]\s*[|\uff5c]\s*"
+    r"([a-zA-Z_][\w.-]*)\b([^>]*)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_ATTRIBUTE_PATTERN = re.compile(
+    r"([a-zA-Z_][\w.-]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+    re.DOTALL,
+)
 
 
 class TextToolCallFilter:
@@ -82,23 +92,19 @@ class TextToolCallFilter:
 
         while text:
             if self._in_tool_call:
-                lower = text.lower()
-                end_tag = f"</{self._tool_tag}>"
-                end = lower.find(end_tag)
-                if end == -1:
-                    self._tool_buffer += text
+                combined = self._tool_buffer + text
+                end_span = _find_tool_end(combined, self._tool_tag or "")
+                if end_span is None:
+                    self._tool_buffer = combined
                     text = ""
                     continue
 
-                end_index = end + len(end_tag)
-                self._tool_buffer += text[:end_index]
-                tool_call = parse_text_tool_call(self._tool_buffer, mode=self.mode)
-                if tool_call:
-                    tool_calls.append(tool_call)
+                _, end_index = end_span
+                tool_calls.extend(parse_text_tool_calls(combined[:end_index], mode=self.mode))
                 self._tool_buffer = ""
                 self._in_tool_call = False
                 self._tool_tag = None
-                text = text[end_index:]
+                text = combined[end_index:]
                 continue
 
             match = _find_next_tool_start(text, self._tool_start_tags)
@@ -131,13 +137,14 @@ class TextToolCallFilter:
         tool_calls: list[dict[str, Any]] = []
 
         if self._in_tool_call and self._tool_buffer:
-            tool_call = parse_text_tool_call(self._tool_buffer, mode=self.mode)
-            if tool_call:
-                tool_call["parse_error"] = (
-                    "Textual tool call was not closed with the expected closing tag. "
-                    "The tool was not executed. Retry with a complete tool call."
-                )
-                tool_calls.append(tool_call)
+            parsed_tool_calls = parse_text_tool_calls(self._tool_buffer, mode=self.mode)
+            if parsed_tool_calls:
+                for tool_call in parsed_tool_calls:
+                    tool_call["parse_error"] = (
+                        "Textual tool call was not closed with the expected closing tag. "
+                        "The tool was not executed. Retry with a complete tool call."
+                    )
+                tool_calls.extend(parsed_tool_calls)
             else:
                 visible += self._tool_buffer
             self._tool_buffer = ""
@@ -166,11 +173,25 @@ def normalize_text_tool_mode(mode: str | None) -> str:
     return normalized
 
 
+def parse_text_tool_calls(
+    raw: str,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> list[dict[str, Any]]:
+    """Parse one or more textual tool calls from a single hidden block."""
+    mode = normalize_text_tool_mode(mode)
+    if mode == TEXT_TOOL_MODE_DISABLED:
+        return []
+    if _contains_dsml_tool_call(raw):
+        return _parse_dsml_tool_calls(raw)
+    tool_call = parse_text_tool_call(raw, mode=mode)
+    return [tool_call] if tool_call else []
+
+
 def parse_text_tool_call(
     raw: str,
     mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
 ) -> dict[str, Any] | None:
-    """Parse one XML-ish or JSON-ish tool call block into provider event data."""
+    """Parse one XML-ish, DSML-ish, or JSON-ish tool call block into provider event data."""
     mode = normalize_text_tool_mode(mode)
     if mode == TEXT_TOOL_MODE_DISABLED:
         return None
@@ -179,13 +200,15 @@ def parse_text_tool_call(
     if not raw:
         return None
 
+    if _contains_dsml_tool_call(raw):
+        calls = _parse_dsml_tool_calls(raw)
+        return calls[0] if calls else None
+
     tag = _opening_tag_name(raw)
     if tag == "tool_code":
         return _parse_tool_code_call(raw)
-    if tag in _DIRECT_TOOL_TAGS:
-        return _parse_direct_tag_tool_call(raw, tag)
     if tag in _SINGLE_TOOL_TAGS and mode == TEXT_TOOL_MODE_MIMO:
-        return _parse_single_tag_tool_call(raw, tag)
+        return _parse_direct_tag_tool_call(raw, tag)
     if tag in _SINGLE_TOOL_TAGS:
         return None
 
@@ -199,6 +222,129 @@ def parse_text_tool_call(
 
     arguments = _extract_parameters(raw)
     return _build_text_tool_call(name, arguments, raw)
+
+
+def _contains_dsml_tool_call(raw: str) -> bool:
+    for match in _DSML_TAG_PATTERN.finditer(raw):
+        if match.group(1):
+            continue
+        tag = _normalize_dsml_tag_name(match.group(2))
+        if tag in _DSML_TOOL_START_TAGS:
+            return True
+    return False
+
+
+def _parse_dsml_tool_calls(raw: str) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    search_from = 0
+    while True:
+        invoke_open = _find_dsml_tag(raw, "invoke", closing=False, start=search_from)
+        if invoke_open is None:
+            break
+        invoke_close = _find_dsml_tag(raw, "invoke", closing=True, start=invoke_open.end())
+        if invoke_close is None:
+            invoke_body = raw[invoke_open.end():]
+            invoke_raw = raw[invoke_open.start():]
+            search_from = len(raw)
+        else:
+            invoke_body = raw[invoke_open.end():invoke_close.start()]
+            invoke_raw = raw[invoke_open.start():invoke_close.end()]
+            search_from = invoke_close.end()
+
+        attrs = _parse_attributes(invoke_open.group(3))
+        name = (attrs.get("name") or attrs.get("tool") or attrs.get("function") or "").strip()
+        if not name:
+            continue
+        arguments = _normalize_argument_names(name, _extract_dsml_parameters(invoke_body))
+        calls.append(_build_text_tool_call(name, arguments, invoke_raw))
+
+    return calls
+
+
+def _extract_dsml_parameters(body: str) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    search_from = 0
+    while True:
+        parameter_open = _find_dsml_tag(body, "parameter", closing=False, start=search_from)
+        if parameter_open is None:
+            break
+        parameter_close = _find_dsml_tag(
+            body,
+            "parameter",
+            closing=True,
+            start=parameter_open.end(),
+        )
+        if parameter_close is None:
+            value_text = body[parameter_open.end():]
+            search_from = len(body)
+        else:
+            value_text = body[parameter_open.end():parameter_close.start()]
+            search_from = parameter_close.end()
+
+        attrs = _parse_attributes(parameter_open.group(3))
+        name = (attrs.get("name") or attrs.get("parameter") or "").strip()
+        if not name:
+            continue
+        arguments[name] = _coerce_dsml_parameter_value(value_text.strip(), attrs)
+
+    return arguments
+
+
+def _find_dsml_tag(
+    text: str,
+    tag_name: str,
+    *,
+    closing: bool,
+    start: int = 0,
+) -> re.Match[str] | None:
+    normalized_tag_name = _normalize_dsml_tag_name(tag_name)
+    for match in _DSML_TAG_PATTERN.finditer(text, start):
+        if bool(match.group(1)) != closing:
+            continue
+        if _normalize_dsml_tag_name(match.group(2)) == normalized_tag_name:
+            return match
+    return None
+
+
+def _parse_attributes(raw_attributes: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for match in _ATTRIBUTE_PATTERN.finditer(raw_attributes or ""):
+        value = next(group for group in match.groups()[1:] if group is not None)
+        attrs[match.group(1).casefold()] = value
+    return attrs
+
+
+def _coerce_dsml_parameter_value(value: str, attrs: dict[str, str]) -> Any:
+    if _attribute_is_true(attrs, "string"):
+        return _strip_quotes_preserving_backslashes(value)
+    if _attribute_is_true(attrs, "json"):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return parsed
+    return _coerce_parameter_value(value)
+
+
+def _attribute_is_true(attrs: dict[str, str], name: str) -> bool:
+    return (attrs.get(name) or "").casefold() == "true"
+
+
+def _normalize_dsml_tag_name(tag_name: str) -> str:
+    return tag_name.casefold().replace("-", "_")
+
+
+def _find_tool_end(text: str, tag: str) -> tuple[int, int] | None:
+    if tag.startswith("dsml:"):
+        match = _find_dsml_tag(text, tag.removeprefix("dsml:"), closing=True)
+        return (match.start(), match.end()) if match else None
+
+    lower = text.lower()
+    end_tag = f"</{tag}>"
+    end = lower.find(end_tag)
+    if end == -1:
+        return None
+    return end, end + len(end_tag)
 
 
 def _parse_tool_code_call(raw: str) -> dict[str, Any] | None:
@@ -599,7 +745,7 @@ def _tool_start_tags_for_mode(mode: str) -> tuple[str, ...]:
         return ()
     if mode == TEXT_TOOL_MODE_MIMO:
         return _MIMO_TOOL_START_TAGS
-    return (*_TOOL_BLOCK_TAGS, *_DIRECT_TOOL_TAGS)
+    return _TOOL_BLOCK_TAGS
 
 
 def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] | None:
@@ -619,6 +765,24 @@ def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] |
                 continue
         if best is None or start < best[0]:
             best = (start, tag)
+
+    dsml_match = _find_next_dsml_tool_start(text)
+    if dsml_match is not None and (best is None or dsml_match[0] < best[0]):
+        best = dsml_match
+    return best
+
+
+def _find_next_dsml_tool_start(text: str) -> tuple[int, str] | None:
+    best: tuple[int, str] | None = None
+    for match in _DSML_TAG_PATTERN.finditer(text):
+        if match.group(1):
+            continue
+        tag = _normalize_dsml_tag_name(match.group(2))
+        if tag not in _DSML_TOOL_START_TAGS:
+            continue
+        candidate = (match.start(), f"dsml:{tag}")
+        if best is None or candidate[0] < best[0]:
+            best = candidate
     return best
 
 
@@ -627,11 +791,30 @@ def _possible_start_prefix_len(text: str, tags: tuple[str, ...]) -> int:
         return 0
     lower = text.lower()
     max_len = min(max(len(f"<{tag}") for tag in tags) - 1, len(lower))
+    xml_keep = 0
     for size in range(max_len, 0, -1):
         suffix = lower[-size:]
         if any(f"<{tag}".startswith(suffix) for tag in tags):
+            xml_keep = size
+            break
+    return max(xml_keep, _possible_dsml_start_prefix_len(text))
+
+
+def _possible_dsml_start_prefix_len(text: str) -> int:
+    starts = [f"<||dsml||{tag}" for tag in _DSML_TOOL_START_TAGS]
+    max_len = min(80, len(text))
+    for size in range(max_len, 0, -1):
+        suffix = text[-size:]
+        if not suffix.startswith("<"):
+            continue
+        compact_suffix = _compact_dsml_marker(suffix)
+        if compact_suffix and any(start.startswith(compact_suffix) for start in starts):
             return size
     return 0
+
+
+def _compact_dsml_marker(text: str) -> str:
+    return re.sub(r"\s+", "", text).casefold().replace("\uff5c", "|")
 
 
 def _normalize_name(name: str) -> str:
