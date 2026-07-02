@@ -118,13 +118,6 @@ class MainScreen(Screen):
         except Exception:
             pass
         try:
-            selected_text = self.get_selected_text()
-            if selected_text:
-                self.app.copy_to_clipboard(selected_text)
-                return
-        except Exception:
-            pass
-        try:
             header = self.query_one(CustomHeader)
             selected_text = header.get_selected_text()
             if selected_text:
@@ -137,6 +130,7 @@ class MainScreen(Screen):
             selected_text = log.get_selected_text()
             if selected_text:
                 self.app.copy_to_clipboard(selected_text)
+                return
         except Exception:
             pass
 

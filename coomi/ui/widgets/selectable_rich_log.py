@@ -16,7 +16,7 @@ from textual.widgets import RichLog
 class SelectableRichLog(RichLog):
     """支持文本选择的 RichLog"""
 
-    ALLOW_SELECT = True
+    ALLOW_SELECT = False
 
     # 选择状态
     _selection_start: tuple[int, int] | None = None  # (line, cell_col)

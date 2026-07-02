@@ -536,13 +536,6 @@ class CoomiApp(App):
         except Exception:
             pass
         try:
-            selected_text = self.screen.get_selected_text()
-            if selected_text:
-                self.copy_to_clipboard(selected_text)
-                return
-        except Exception:
-            pass
-        try:
             header = self.screen.query_one(CustomHeader)
             selected_text = header.get_selected_text()
             if selected_text:
@@ -555,6 +548,7 @@ class CoomiApp(App):
             selected_text = log.get_selected_text()
             if selected_text:
                 self.copy_to_clipboard(selected_text)
+                return
         except Exception:
             pass
 

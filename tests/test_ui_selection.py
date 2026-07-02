@@ -113,6 +113,48 @@ async def test_main_screen_copy_selected_prefers_prompt_selection():
 
 
 @pytest.mark.asyncio
+async def test_main_screen_copy_selected_uses_log_highlight():
+    app = MainScreenCopyTestApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+
+        app.screen.hide_welcome_panel()
+        log = app.screen.query_one("#message-log", SelectableRichLog)
+        log.write("hello world")
+        await pilot.pause()
+
+        await pilot.mouse_down(log, offset=(0, 0), button=1)
+        await pilot.hover(log, offset=(5, 0))
+        await pilot.mouse_up(log, offset=(5, 0))
+        await pilot.pause()
+
+        app.screen.action_copy_selected()
+
+        assert app.clipboard == "hello"
+
+
+@pytest.mark.asyncio
+async def test_coomi_app_ctrl_c_copies_log_highlight():
+    app = CoomiApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        app.screen.hide_welcome_panel()
+        log = app.screen.query_one("#message-log", SelectableRichLog)
+        log.write("hello world")
+        await pilot.pause()
+
+        await pilot.mouse_down(log, offset=(0, 0), button=1)
+        await pilot.hover(log, offset=(6, 0))
+        await pilot.mouse_up(log, offset=(6, 0))
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert app.clipboard == "hello"
+
+
+@pytest.mark.asyncio
 async def test_main_screen_focuses_prompt_on_mount():
     app = MainScreenCopyTestApp()
     async with app.run_test(size=(80, 24)) as pilot:
