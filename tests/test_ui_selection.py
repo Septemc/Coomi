@@ -10,6 +10,7 @@ from textual.widgets.text_area import Selection
 from coomi.ui.screens.main_screen import MainScreen
 from coomi.ui.status_line import StatusLine
 from coomi.ui.textual_app import CoomiApp
+from coomi.ui.widgets.custom_header import CustomHeader
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
@@ -28,6 +29,22 @@ class SelectionTestApp(App):
 class MainScreenCopyTestApp(App):
     async def on_mount(self) -> None:
         self.push_screen(MainScreen(status_line=StatusLine()))
+
+
+class HeaderClickTestApp(App):
+    def __init__(self) -> None:
+        super().__init__()
+        self.home_clicks = 0
+        self.settings_clicks = 0
+
+    async def on_mount(self) -> None:
+        self.push_screen(MainScreen(status_line=StatusLine()))
+
+    def action_go_home(self) -> None:
+        self.home_clicks += 1
+
+    def action_open_settings(self) -> None:
+        self.settings_clicks += 1
 
 
 def test_slice_text_cells_handles_wide_characters():
@@ -125,6 +142,21 @@ async def test_coomi_app_routes_text_to_prompt_when_focus_drifts():
 
         assert app.focused is prompt
         assert prompt.text == "a b"
+
+
+@pytest.mark.asyncio
+async def test_custom_header_home_and_setting_are_clickable():
+    app = HeaderClickTestApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+
+        header = app.screen.query_one(CustomHeader)
+        await pilot.click(header, offset=(header._home_start, 0))
+        await pilot.click(header, offset=(header._setting_start, 0))
+        await pilot.pause()
+
+        assert app.home_clicks == 1
+        assert app.settings_clicks == 1
 
 
 def test_plan_panel_collects_multi_select_answers():

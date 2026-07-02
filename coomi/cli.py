@@ -8,9 +8,9 @@ from pathlib import Path
 
 
 def _is_mouse_enabled() -> bool:
-    """Return True only when terminal mouse tracking is explicitly requested."""
+    """Return False only when terminal mouse tracking is explicitly disabled."""
     value = os.getenv("COOMI_MOUSE", "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return value not in {"0", "false", "no", "off"}
 
 
 def main():
