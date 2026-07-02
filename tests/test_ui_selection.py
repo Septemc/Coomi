@@ -5,9 +5,14 @@ from rich.segment import Segment
 from rich.style import Style
 from textual.app import App, ComposeResult
 from textual.strip import Strip
+from textual.widgets.text_area import Selection
 
+from coomi.ui.screens.main_screen import MainScreen
+from coomi.ui.status_line import StatusLine
+from coomi.ui.textual_app import CoomiApp
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
+from coomi.ui.widgets.prompt_text_area import PromptTextArea
 
 
 class SelectionTestApp(App):
@@ -18,6 +23,11 @@ class SelectionTestApp(App):
 
     async def on_mount(self) -> None:
         self.query_one("#log", SelectableRichLog).write("hello world")
+
+
+class MainScreenCopyTestApp(App):
+    async def on_mount(self) -> None:
+        self.push_screen(MainScreen(status_line=StatusLine()))
 
 
 def test_slice_text_cells_handles_wide_characters():
@@ -68,6 +78,53 @@ async def test_selectable_rich_log_left_drag_from_trailing_space():
 
         assert log.has_selection()
         assert log.get_selected_text() == "world"
+
+
+@pytest.mark.asyncio
+async def test_main_screen_copy_selected_prefers_prompt_selection():
+    app = MainScreenCopyTestApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+
+        prompt = app.screen.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "copy me"
+        prompt.selection = Selection((0, 0), (0, 4))
+
+        app.screen.action_copy_selected()
+
+        assert app.clipboard == "copy"
+
+
+@pytest.mark.asyncio
+async def test_main_screen_focuses_prompt_on_mount():
+    app = MainScreenCopyTestApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+
+        prompt = app.screen.query_one("#prompt-input", PromptTextArea)
+        await pilot.press("h", "i")
+        await pilot.pause()
+
+        assert app.focused is prompt
+        assert prompt.text == "hi"
+
+
+@pytest.mark.asyncio
+async def test_coomi_app_routes_text_to_prompt_when_focus_drifts():
+    app = CoomiApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        prompt = app.screen.query_one("#prompt-input", PromptTextArea)
+        log = app.screen.query_one("#message-log", SelectableRichLog)
+        log.display = True
+        log.focus()
+
+        await pilot.press("a", "space", "b")
+        await pilot.pause()
+
+        assert app.focused is prompt
+        assert prompt.text == "a b"
 
 
 def test_plan_panel_collects_multi_select_answers():

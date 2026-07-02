@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coomi-agent"
-version = "0.1.0"
-description = "受 Claude Code 启发的 AI 编程助手 — 基于 TUI 的自主 Agent"
+version = "0.1.2"
+description = "一款纯净的自主 Agent 系统。"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 readme = "README.md"

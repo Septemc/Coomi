@@ -65,6 +65,7 @@ class MainScreen(Screen):
     def on_mount(self) -> None:
         self.message_log.display = False
         self.welcome_panel.display = True
+        self.call_after_refresh(self.focus_prompt_input)
 
     @property
     def welcome_panel(self) -> WelcomePanel:
@@ -86,19 +87,43 @@ class MainScreen(Screen):
     def prompt_input(self) -> PromptTextArea:
         return self.query_one("#prompt-input", PromptTextArea)
 
+    def focus_prompt_input(self) -> None:
+        """Keep keyboard input anchored to the bottom prompt."""
+        try:
+            self.prompt_input.focus()
+        except Exception:
+            pass
+
     def show_welcome_panel(self) -> None:
         self.message_log.display = False
         self.welcome_panel.display = True
+        self.call_after_refresh(self.focus_prompt_input)
 
     def hide_welcome_panel(self) -> None:
         self.welcome_panel.display = False
         self.message_log.display = True
+        self.call_after_refresh(self.focus_prompt_input)
 
     def update_welcome_panel(self, model_display: str, tool_count: int, sessions=None) -> None:
         self.welcome_panel.set_context(model_display, tool_count, sessions=sessions)
 
     def action_copy_selected(self) -> None:
         """复制选中的文本"""
+        try:
+            prompt = self.query_one("#prompt-input", PromptTextArea)
+            selected_text = prompt.selected_text
+            if selected_text:
+                self.app.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
+        try:
+            selected_text = self.get_selected_text()
+            if selected_text:
+                self.app.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
         try:
             header = self.query_one(CustomHeader)
             selected_text = header.get_selected_text()

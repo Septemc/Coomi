@@ -319,6 +319,7 @@ class CoomiApp(App):
             if hasattr(self.screen, "update_welcome_panel"):
                 self.screen.update_welcome_panel(self._display_name, tool_count, sessions)
                 self.screen.show_welcome_panel()
+                self._focus_prompt_input()
         except Exception:
             pass
 
@@ -525,7 +526,22 @@ class CoomiApp(App):
             pass
 
     def action_copy_selected(self) -> None:
-        """Ctrl+C 只复制消息区选中文本，不触发退出/中断。"""
+        """Ctrl+C 复制当前选中文本，不触发退出/中断。"""
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+            selected_text = prompt.selected_text
+            if selected_text:
+                self.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
+        try:
+            selected_text = self.screen.get_selected_text()
+            if selected_text:
+                self.copy_to_clipboard(selected_text)
+                return
+        except Exception:
+            pass
         try:
             header = self.screen.query_one(CustomHeader)
             selected_text = header.get_selected_text()
@@ -547,6 +563,57 @@ class CoomiApp(App):
             event.prevent_default()
             event.stop()
             self.action_copy_selected()
+            return
+        if self._route_key_to_prompt_if_needed(event):
+            return
+
+    def _focus_prompt_input(self) -> PromptTextArea | None:
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+            prompt.focus()
+            return prompt
+        except Exception:
+            return None
+
+    def _route_key_to_prompt_if_needed(self, event: events.Key) -> bool:
+        """Recover prompt input if focus drifts to log/history widgets."""
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+        except Exception:
+            return False
+        if self.focused is prompt or prompt.disabled:
+            return False
+
+        if self._interactive_mode in ("model_picker", "context_picker"):
+            return False
+        if self._interactive_mode == "question":
+            if not (self._plan_panel and self._plan_panel._is_other_selected):
+                return False
+
+        if event.key == "enter":
+            text = prompt.text.strip()
+            if not text:
+                return False
+            event.prevent_default()
+            event.stop()
+            prompt.focus()
+            prompt.post_message(PromptTextArea.Submitted(text))
+            return True
+
+        character = getattr(event, "character", None)
+        if character is None and event.key == "space":
+            character = " "
+        if not character or event.key in {"tab", "escape"} or "+" in event.key:
+            return False
+
+        event.prevent_default()
+        event.stop()
+        prompt.focus()
+        try:
+            prompt._replace_via_keyboard(character, *prompt.selection)
+        except Exception:
+            prompt.text = f"{prompt.text}{character}"
+        return True
 
     def action_cycle_permission_mode(self) -> None:
         self._permission_system.cycle_mode()
@@ -1048,6 +1115,7 @@ class CoomiApp(App):
             panel.remove()
         except Exception:
             pass
+        self._focus_prompt_input()
         try:
             status = self.screen.query_one("#status-panel", StatusPanel)
             status.set_idle()
@@ -1080,6 +1148,7 @@ class CoomiApp(App):
             log = self.screen.query_one("#message-log", RichLog)
             await self.screen.mount(self._command_list, before=log)
             self._set_interactive_mode("command")
+            self._focus_prompt_input()
         except Exception:
             pass
 
@@ -1091,6 +1160,7 @@ class CoomiApp(App):
                 pass
             self._command_list = None
         self._set_interactive_mode("none")
+        self._focus_prompt_input()
 
     # -- model picker -------------------------------------------------------
 
@@ -1120,6 +1190,7 @@ class CoomiApp(App):
                 pass
             self._model_picker = None
         self._set_interactive_mode("none")
+        self._focus_prompt_input()
 
     def _apply_model_selection(self, provider, mode: str) -> None:
         """应用模型选择结果"""
@@ -1174,6 +1245,7 @@ class CoomiApp(App):
                 pass
             self._context_picker = None
         self._set_interactive_mode("none")
+        self._focus_prompt_input()
 
     def _apply_context_selection(self, size: int) -> None:
         """应用上下文窗口选择结果"""
@@ -1634,6 +1706,7 @@ class CoomiApp(App):
             status.set_idle()
             preview.clear_preview()
             prompt.disabled = False
+            prompt.focus()
 
             # Post-run token accounting is synchronous; memory extraction is best-effort.
             try:
