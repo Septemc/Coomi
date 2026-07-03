@@ -53,7 +53,7 @@ from ..tools.registry import ToolRegistry
 LOOP_SYSTEM_PROMPT_EXTRA = """
 ## Loop Mode
 
-You are operating in **LOOP MODE** — an autonomous long-running task execution mode. 
+Coomi Agent is operating in **LOOP MODE** — an autonomous long-running task execution mode.
 Your goal is to execute ALL steps in the spec document until completion.
 
 ### Rules

@@ -126,7 +126,7 @@ def load_session_from_jsonl(path: str | Path) -> Session:
     created_at = _parse_dt(metadata.get("created_at")) or datetime.now()
     session = Session(
         id=metadata.get("id") or source.stem,
-        system_prompt=metadata.get("system_prompt") or "You are a helpful assistant",
+        system_prompt=metadata.get("system_prompt") or "You are Coomi Agent.",
         messages=messages,
         created_at=created_at,
         current_model=metadata.get("model") or None,

@@ -173,7 +173,13 @@ class ProviderEditScreen(ModalScreen[bool]):
             fast_model=values.get("fast_model") or None,
             tool_protocol=tool_protocol,
         )
+        old_id = self._provider.id if self._provider else None
+        was_active = bool(old_id and self._config_mgr.data.get("active") == old_id)
+        if old_id and old_id != config.id:
+            self._config_mgr.remove_provider(old_id)
         self._config_mgr.add_provider(config)
+        if was_active and old_id != config.id:
+            self._config_mgr.set_active(config.id)
         self.dismiss(True)
 
     def action_cancel(self) -> None:

@@ -408,6 +408,64 @@ class CoomiApp(App):
 
         self.push_screen(SettingsScreen(), on_settings_result)
 
+    def _apply_provider_runtime(self, new_provider, provider_id: str, mode_label: str | None = None) -> None:
+        """Attach a provider instance to every live runtime component."""
+        self._provider = new_provider
+        self._display_name = new_provider.get_model_display_name()
+        self._active_provider_id = provider_id
+
+        if self._agent:
+            self._agent.llm = new_provider
+            self._agent.compressor.llm = new_provider
+        if self._memory_extractor:
+            self._memory_extractor.llm = new_provider
+        if self._memory_recall:
+            self._memory_recall.llm = new_provider
+
+        self._ctx["provider"] = new_provider
+        if self._agent:
+            self._ctx["agent"] = self._agent
+        if self._memory_extractor:
+            self._ctx["memory_extractor"] = self._memory_extractor
+        if self._memory_recall:
+            self._ctx["memory_recall"] = self._memory_recall
+        self._ctx["display_name"] = self._display_name
+
+        self.status_line.set_model(new_provider.model, self._display_name)
+        self._refresh_status_panel()
+
+        if mode_label:
+            self._show_command_result(
+                f"[bold cyan]Switched to:[/bold cyan] {self._display_name} "
+                f"([dim]{new_provider.model}[/dim]) [{mode_label}]"
+            )
+
+    async def _reload_active_provider_from_config(self, show_message: bool = False) -> bool:
+        """Reload providers.json and refresh the active model in the running app."""
+        if not self._config_mgr:
+            return False
+        self._config_mgr.reload()
+        active_id = self._config_mgr.data.get("active", "")
+        if not active_id:
+            if show_message:
+                self._show_command_result("[yellow]Provider saved, but no active provider is configured.[/yellow]")
+            return False
+        try:
+            new_provider = get_llm_provider(active_id)
+        except Exception as exc:
+            if show_message:
+                self._show_command_result(f"[red]Failed to reload provider:[/red] {exc}")
+            return False
+
+        self._apply_provider_runtime(new_provider, active_id)
+        await self._rebuild_system_prompt()
+        if show_message:
+            self._show_command_result(
+                f"[bold green]Provider saved and active model refreshed:[/bold green] "
+                f"{self._display_name} ([dim]{new_provider.model}[/dim])"
+            )
+        return True
+
     def action_go_home(self) -> None:
         """Return to the welcome screen without modifying the current session."""
         if self._agent_running:
@@ -424,6 +482,7 @@ class CoomiApp(App):
         from .screens.provider_list_screen import ProviderListScreen
 
         def on_provider_list_result(result: dict | None) -> None:
+            asyncio.create_task(self._reload_active_provider_from_config())
             if result is None:
                 return
             if result["action"] == "add":
@@ -439,7 +498,7 @@ class CoomiApp(App):
 
         def on_edit_result(saved: bool) -> None:
             if saved:
-                self._show_command_result("[bold green]Provider 已保存[/bold green]")
+                asyncio.create_task(self._reload_active_provider_from_config(show_message=True))
 
         self.push_screen(ProviderEditScreen(self._config_mgr, provider), on_edit_result)
 
@@ -1160,6 +1219,7 @@ class CoomiApp(App):
 
     async def _show_model_picker(self) -> None:
         from .widgets.model_picker import ModelPicker
+        self._config_mgr.reload()
         providers = self._config_mgr.list_providers()
         if not providers:
             self._show_command_result("[dim]No providers configured. Edit ~/.coomi/config/providers.json[/dim]")
@@ -1198,24 +1258,8 @@ class CoomiApp(App):
             return
 
         new_provider = get_llm_provider(provider_id)
-        self._provider = new_provider
-        self._ctx["provider"] = new_provider
-        self._ctx["agent"].llm = new_provider
-        self._ctx["agent"].compressor.llm = new_provider
-        if self._ctx.get("memory_extractor"):
-            self._ctx["memory_extractor"].llm = new_provider
-        if self._ctx.get("memory_recall"):
-            self._ctx["memory_recall"].llm = new_provider
-
-        self._display_name = new_provider.get_model_display_name()
-        self.status_line.set_model(new_provider.model, self._display_name)
-        self._ctx["display_name"] = self._display_name
-        self._active_provider_id = provider_id
-        self._refresh_status_panel()
-        self._show_command_result(
-            f"[bold cyan]Switched to:[/bold cyan] {self._display_name} "
-            f"([dim]{new_provider.model}[/dim]) [{mode_label}]"
-        )
+        self._apply_provider_runtime(new_provider, provider_id, mode_label=mode_label)
+        asyncio.create_task(self._rebuild_system_prompt())
 
     # -- context picker -----------------------------------------------------
 
@@ -1411,7 +1455,7 @@ class CoomiApp(App):
             return
         if self._session and not self._session.messages:
             return
-        system_prompt = self._session.system_prompt if self._session else "You are a helpful assistant"
+        system_prompt = self._session.system_prompt if self._session else "You are Coomi Agent."
         self._session = self._session_mgr.create_session(
             system_prompt=system_prompt,
             cwd=self._cwd,

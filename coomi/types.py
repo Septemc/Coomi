@@ -80,7 +80,7 @@ class TokenUsage:
 class Session:
     """会话"""
     id: str
-    system_prompt: str = "You are a helpful assistant"
+    system_prompt: str = "You are Coomi Agent."
     messages: list[Message] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     token_usage: TokenUsage = field(default_factory=TokenUsage)

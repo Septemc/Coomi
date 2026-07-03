@@ -11,7 +11,7 @@ class ConfigTool(BaseTool):
     """获取/设置配置"""
 
     name = "Config"
-    description = "Use this skill to configure the Claude Code harness via settings.json."
+    description = "Use this skill to configure the Coomi Agent harness via settings.json."
     access = ToolAccess.WRITE
     concurrency = ToolConcurrency.BLOCKING
     requires_confirmation = False

@@ -229,6 +229,11 @@ class ConfigManager:
             encoding="utf-8",
         )
 
+    def reload(self) -> dict:
+        """Reload provider configuration from disk."""
+        self.data = self._load()
+        return self.data
+
     # ---- Provider 操作 ----
 
     def list_providers(self) -> list[ProviderConfig]:
@@ -264,6 +269,9 @@ class ConfigManager:
         if "providers" not in self.data:
             self.data["providers"] = {}
         self.data["providers"][config.id] = config.to_dict()
+        active_id = self.data.get("active", "")
+        if not active_id or active_id not in self.data["providers"]:
+            self.data["active"] = config.id
         self.save()
 
     def remove_provider(self, provider_id: str) -> bool:

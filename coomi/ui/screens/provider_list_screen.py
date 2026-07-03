@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -98,11 +99,14 @@ class ProviderListScreen(ModalScreen[Optional[dict]]):
     def action_delete_provider(self) -> None:
         if self._selected < len(self._providers):
             provider = self._providers[self._selected]
-            self._config_mgr.remove_provider(provider.id)
+            removed = self._config_mgr.remove_provider(provider.id)
             self._providers = self._config_mgr.list_providers()
             if self._selected >= len(self._providers):
                 self._selected = max(0, len(self._providers) - 1)
             self._refresh_display()
+            reload_active = getattr(self.app, "_reload_active_provider_from_config", None)
+            if removed and reload_active:
+                asyncio.create_task(reload_active(show_message=True))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 # 对齐 Claude Code：角色定义 / 安全红线 / 行为准则 / 操作安全 / 工具使用 / Git 安全 / 输出风格
 # ============================================================
 
-STATIC_SYSTEM_PROMPT = """You are an interactive agent helping users with software engineering tasks.
+STATIC_SYSTEM_PROMPT = """You are Coomi Agent. You help users with software engineering tasks.
+Coomi Agent is your only product identity. Do not describe yourself as Claude Code,
+ChatGPT, a generic assistant, or any other agent.
 Use the instructions below and the available tools to assist the user.
 
 IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident
@@ -148,7 +150,7 @@ class SessionManager:
 
     def create_session(
         self,
-        system_prompt: str = "You are a helpful assistant",
+        system_prompt: str = "You are Coomi Agent.",
         cwd: str | None = None,
         model: str = "",
     ) -> Session:

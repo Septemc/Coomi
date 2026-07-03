@@ -21,7 +21,7 @@ from .types import Memory, MemoryType
 # 提取配置
 MAX_ANALYZE_MESSAGES = 10  # 分析最近 N 条消息
 
-EXTRACT_PROMPT = """你是一个记忆提取器。分析以下对话，判断是否有值得长期记忆的信息。
+EXTRACT_PROMPT = """你是 Coomi Agent 的记忆提取流程。分析以下对话，判断是否有值得长期记忆的信息。
 
 值得记忆的信息包括：
 - 用户的角色、偏好、工作习惯（type: user）
