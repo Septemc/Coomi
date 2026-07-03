@@ -18,6 +18,8 @@ COMMANDS = [
     ("/context", "设置上下文窗口大小"),
     ("/permission", "查看/切换权限模式"),
     ("/memory", "记忆管理 (list/add/delete/search)"),
+    ("/skill", "Skill 扩展管理"),
+    ("/mcp", "MCP Server 管理"),
     ("/compact", "立即压缩上下文"),
     ("/clear", "清空当前会话历史"),
     ("/help", "显示帮助信息"),

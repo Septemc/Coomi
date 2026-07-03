@@ -25,7 +25,10 @@ class AgentTool(BaseTool):
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt for the subagent",
+                    "description": (
+                        "Detailed instructions for the subagent. If omitted, Coomi uses "
+                        "the description as the prompt."
+                    ),
                 },
                 "model": {
                     "type": "string",
@@ -37,12 +40,20 @@ class AgentTool(BaseTool):
                     "description": "Run the subagent in the background",
                 },
             },
-            "required": ["description", "prompt"],
+            "required": ["description"],
         }
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
+        description = str(arguments.get("description") or "").strip()
+        prompt = str(arguments.get("prompt") or description).strip()
+        requested = prompt or description or "(empty)"
         return ToolResult(
             success=False,
             output="",
-            error="AgentTool 尚未实现，请直接执行任务而非委托给子 Agent",
+            error=(
+                "Agent/Task delegation is recognized, but sub-agent execution is not "
+                "implemented yet. Continue by performing the task directly in the "
+                "current agent session, or implement the sub-agent runner before "
+                f"delegating. Requested task: {requested}"
+            ),
         )

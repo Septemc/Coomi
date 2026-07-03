@@ -19,7 +19,6 @@ from ..types import Session, ToolCall
 
 LARGE_RESULT_THRESHOLD = 50 * 1024
 PREVIEW_CHARS = 4 * 1024
-TEXT_FALLBACK_FORCE_ASK_TOOLS = {"Write", "Edit", "Bash", "PowerShell", "Agent"}
 PLAN_MODE_ALLOWED_SHELL_COMMANDS = {
     "cat",
     "dir",
@@ -233,7 +232,7 @@ class ToolExecutor:
         source: str = "native",
     ) -> tuple[bool, str | None]:
         level = self.permission_system.check_permission(tool.name, arguments)
-        if source == "text_fallback" and tool.name in TEXT_FALLBACK_FORCE_ASK_TOOLS:
+        if source == "text_fallback" and tool.access in {ToolAccess.WRITE, ToolAccess.DESTRUCTIVE}:
             level = PermissionLevel.ASK
         if level == PermissionLevel.AUTO:
             return True, None

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from coomi.engine.tool_executor import ToolExecutor
+from coomi.security import PermissionMode, PermissionSystem
+from coomi.tools.registry import ToolRegistry
 from coomi.tools.web.fetch import WebFetchTool
+from coomi.types import Session, ToolCall
 
 
 class FakeResponse:
@@ -49,3 +53,45 @@ def test_web_fetch_soft_blocks_forbidden(monkeypatch: pytest.MonkeyPatch):
     assert result.success
     assert "HTTP 403" in result.output
     assert "Do not retry the same URL repeatedly" in result.output
+
+
+def test_web_fetch_prompt_is_optional_in_schema():
+    schema = WebFetchTool().get_parameters_schema()
+
+    assert schema["required"] == ["url"]
+    assert "prompt" in schema["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"url": "https://example.com/page"},
+        {"url": "https://example.com/page", "prompt": "read"},
+    ],
+)
+async def test_web_fetch_executor_accepts_url_only_and_optional_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, str],
+):
+    def fake_get(*args, **kwargs):
+        return FakeResponse(
+            "<html><body><p>Hello from executor</p></body></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    monkeypatch.setattr("coomi.tools.web.fetch.httpx.get", fake_get)
+    registry = ToolRegistry()
+    registry.register(WebFetchTool())
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(registry, permission_system=permissions)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="WebFetch", arguments=arguments),
+    )
+
+    assert not outcome.is_error
+    assert "Hello from executor" in outcome.result_text

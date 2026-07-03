@@ -96,9 +96,12 @@ class PlanPanel(Widget):
             else:
                 option_label = escape(str(opt["label"]))
                 label = f"[bold]{option_label}[/bold]" if is_sel else option_label
+                summary = _option_summary(opt)
+                if summary:
+                    label = f"{label} [dim]- {escape(summary)}[/dim]"
                 rec = "  [dim]<- recommended[/dim]" if opt.get("is_recommended") else ""
                 table.add_row(Text.from_markup(f"  {marker} {label}{rec}"))
-                description = opt.get("description")
+                description = _option_description(opt)
                 if description:
                     table.add_row(Text.from_markup(f"      [dim]{escape(str(description))}[/dim]"))
 
@@ -184,3 +187,13 @@ class PlanPanel(Widget):
                 "other_text": other_text or None,
             }
         return answers
+
+
+def _option_summary(option: dict) -> str:
+    summary = option.get("summary") or option.get("preview") or ""
+    return " ".join(str(summary).split())
+
+
+def _option_description(option: dict) -> str:
+    description = option.get("description") or ""
+    return " ".join(str(description).split())

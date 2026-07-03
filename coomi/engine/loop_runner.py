@@ -46,6 +46,7 @@ from .session import Session, build_system_prompt
 from ..services.llm.provider import LLMProvider
 from ..services.memory.manager import MemoryManager
 from ..services.memory.recall import MemoryRecall
+from ..services.skills.manager import SkillManager
 from ..security import HookSystem, PermissionSystem
 from ..tools.registry import ToolRegistry
 
@@ -103,6 +104,7 @@ class LoopRunner:
         loop_id: str | None = None,
         memory_manager: MemoryManager | None = None,
         memory_recall: MemoryRecall | None = None,
+        skill_manager: SkillManager | None = None,
         display_name: str = "",
         on_state_change: Callable[[LoopSession], None] | None = None,
     ) -> AsyncIterator[AgentEvent]:
@@ -140,6 +142,7 @@ class LoopRunner:
         system_prompt = await build_system_prompt(
             memory_manager=memory_manager,
             memory_recall=memory_recall,
+            skill_manager=skill_manager,
             current_context=_build_spec_context(spec),
             cwd=cwd,
             model_display=display_name,

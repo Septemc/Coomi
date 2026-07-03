@@ -17,6 +17,8 @@ COMMANDS = [
     ("/context", "设置上下文窗口"),
     ("/permission", "查看/切换权限模式"),
     ("/memory", "记忆管理"),
+    ("/skill", "Skill 扩展管理"),
+    ("/mcp", "MCP Server 管理"),
     ("/compact", "压缩上下文"),
     ("/clear", "清空会话"),
     ("/help", "显示帮助"),

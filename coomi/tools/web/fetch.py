@@ -72,10 +72,10 @@ class WebFetchTool(BaseTool):
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt to run on the fetched content",
+                    "description": "Optional fetch intent or processing hint for the fetched content",
                 },
             },
-            "required": ["url", "prompt"],
+            "required": ["url"],
         }
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:

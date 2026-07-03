@@ -14,6 +14,7 @@ from ..types import Message, Session, ToolCall
 
 if TYPE_CHECKING:
     from ..services.memory.recall import MemoryRecall
+    from ..services.skills.manager import SkillManager
 
 # ============================================================
 # 静态 System Prompt（所有用户相同，可被 Prompt Cache 缓存）
@@ -109,7 +110,11 @@ Do NOT use AskUserQuestion for:
 
 When using AskUserQuestion, provide:
 - 1-4 questions maximum, each with a short header (≤4 chars)
-- 2-4 options per question with clear labels and descriptions
+- 2-4 options per question
+- For every option, use this structure:
+  - label: a short option name
+  - summary: one concise opening phrase that states the main impact
+  - description: one concrete paragraph explaining implications, tradeoffs, and when to choose it
 - A recommendation for each question when you have a strong preference
 
 ## Git Safety Protocol
@@ -230,6 +235,7 @@ def update_token_usage(session: Session, usage: dict[str, int]) -> None:
 async def build_system_prompt(
     memory_manager: MemoryManager | None = None,
     memory_recall: "MemoryRecall | None" = None,
+    skill_manager: "SkillManager | None" = None,
     current_context: str = "",
     cwd: str | None = None,
     model_display: str = "",
@@ -276,6 +282,11 @@ async def build_system_prompt(
             "information. You must call WebSearch before giving the final answer. This includes "
             "weather forecasts, news, latest events, prices, and other time-sensitive facts."
         )
+
+    if skill_manager:
+        skill_context = skill_manager.build_prompt_context(current_context)
+        if skill_context:
+            dynamic_parts.append(skill_context)
 
     # 1.5 Plan Mode 指令（仅在激活时注入）
     if plan_mode:

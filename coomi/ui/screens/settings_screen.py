@@ -10,8 +10,8 @@ from textual.widgets import Static
 
 SETTINGS_OPTIONS = [
     ("provider_config", "新增/修改模型API配置", "管理 LLM Provider"),
-    ("install_skill", "安装 SKILL", "Coming soon"),
-    ("install_mcp", "安装 MCP", "Coming soon"),
+    ("install_skill", "管理 Skill", "/skill list/install/enable/disable"),
+    ("install_mcp", "管理 MCP", "/mcp list/add stdio|http|sse/test/tools"),
 ]
 
 

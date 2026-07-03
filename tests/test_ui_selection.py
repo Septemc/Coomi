@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from rich.console import Console
 from rich.segment import Segment
 from rich.style import Style
 from textual.app import App, ComposeResult
@@ -224,3 +225,39 @@ def test_plan_panel_collects_multi_select_answers():
     assert answer["option"] == ["cv", "nlp"]
     assert answer["labels"] == ["CV", "NLP"]
     assert answer["label"] == "CV, NLP"
+
+
+def test_plan_panel_renders_option_summary_before_detailed_description():
+    panel = PlanPanel(
+        [
+            {
+                "header": "Mode",
+                "question": "Which implementation path should Coomi use?",
+                "options": [
+                    {
+                        "label": "Conservative",
+                        "summary": "Smallest change",
+                        "description": (
+                            "Use the existing code path and only adjust the narrow behavior. "
+                            "This keeps risk low while still addressing the reported problem."
+                        ),
+                    },
+                    {
+                        "label": "Refactor",
+                        "summary": "Broader cleanup",
+                        "description": (
+                            "Rework the surrounding structure so future features have a clearer place. "
+                            "This takes longer and should be chosen when the current shape is blocking work."
+                        ),
+                    },
+                ],
+            }
+        ]
+    )
+    console = Console(record=True, width=100)
+
+    console.print(panel.render())
+    rendered = console.export_text()
+
+    assert "Conservative - Smallest change" in rendered
+    assert "Use the existing code path and only adjust the narrow behavior." in rendered

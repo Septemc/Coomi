@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 from typing import Any
 
@@ -34,6 +35,10 @@ from ..services.llm.factory import get_config_manager
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
 from ..services.memory.extractor import MemoryExtractor
 from ..services.context.compressor import _estimate_tokens_from_dicts
+from ..services.skills import SkillManager
+from ..services.skills.installer import SkillInstallError
+from ..services.mcp import McpManager
+from ..services.mcp.client import McpError
 from ..security import HookSystem, PermissionSystem
 from ..tools.registry import create_default_registry
 from ..ui.events import (
@@ -209,6 +214,15 @@ def _handle_memory_command(memory_manager: MemoryManager, args: str) -> str:
     return f"[red]Unknown subcommand: {subcmd}[/red]"
 
 
+def _option_value(parts: list[str], option: str) -> str | None:
+    if option not in parts:
+        return None
+    idx = parts.index(option)
+    if idx + 1 >= len(parts):
+        return None
+    return parts[idx + 1]
+
+
 # ============================================================
 # CoomiApp
 # ============================================================
@@ -246,6 +260,8 @@ class CoomiApp(App):
         self._memory_extractor: MemoryExtractor | None = None
         self._memory_recall: MemoryRecall | None = None
         self._tool_registry = None
+        self._skill_manager: SkillManager | None = None
+        self._mcp_manager: McpManager | None = None
         self._display_name: str = ""
         self._ctx: dict = {}
 
@@ -338,6 +354,9 @@ class CoomiApp(App):
         self._provider = get_llm_provider()
         self._active_provider_id = self._config_mgr.data.get("active", "default")
         self._tool_registry = create_default_registry()
+        self._skill_manager = SkillManager()
+        self._mcp_manager = McpManager()
+        self._register_mcp_tools(show_errors=False)
 
         self._memory_manager = MemoryManager(project_path=self._cwd)
         self._memory_extractor = MemoryExtractor(self._provider, self._memory_manager)
@@ -370,6 +389,7 @@ class CoomiApp(App):
         system_prompt = await build_system_prompt(
             memory_manager=self._memory_manager,
             memory_recall=self._memory_recall,
+            skill_manager=self._skill_manager,
             current_context="",
             cwd=self._cwd,
             model_display=self._display_name,
@@ -402,9 +422,9 @@ class CoomiApp(App):
             if option == "provider_config":
                 self._open_provider_list()
             elif option == "install_skill":
-                self._show_command_result("[dim]SKILL 安装功能即将推出...[/dim]")
+                asyncio.create_task(self._show_async_command_result(self._handle_skill_command("")))
             elif option == "install_mcp":
-                self._show_command_result("[dim]MCP 安装功能即将推出...[/dim]")
+                asyncio.create_task(self._show_async_command_result(self._handle_mcp_command("")))
 
         self.push_screen(SettingsScreen(), on_settings_result)
 
@@ -525,6 +545,10 @@ class CoomiApp(App):
         elif cmd == "/memory":
             result = _handle_memory_command(self._memory_manager, "")
             self._show_command_result(result)
+        elif cmd == "/skill":
+            asyncio.create_task(self._show_async_command_result(self._handle_skill_command("")))
+        elif cmd == "/mcp":
+            asyncio.create_task(self._show_async_command_result(self._handle_mcp_command("")))
         elif cmd == "/help":
             self._show_help()
 
@@ -534,6 +558,26 @@ class CoomiApp(App):
             self._wl(log, result)
         except Exception:
             pass
+
+    async def _show_async_command_result(self, awaitable) -> None:
+        self._show_command_result(await awaitable)
+        self._refresh_status_panel()
+
+    def _register_mcp_tools(self, show_errors: bool = True) -> list[str]:
+        if not self._mcp_manager or not self._tool_registry:
+            return []
+        registered = self._mcp_manager.register_enabled_tools(self._tool_registry)
+        if show_errors:
+            errors = [
+                server
+                for server in self._mcp_manager.list(enabled_only=True)
+                if server.last_error
+            ]
+            for server in errors:
+                self._show_command_result(
+                    f"[red]MCP server failed:[/red] {server.name}\n[dim]{server.last_error}[/dim]"
+                )
+        return registered
 
     def open_session_from_history(self, path: str) -> None:
         """Load a JSONL session selected from the welcome screen."""
@@ -686,6 +730,149 @@ class CoomiApp(App):
             "[dim]Press Shift+Tab or run /permission next to cycle.[/dim]"
         )
 
+    async def _handle_skill_command(self, args: str) -> str:
+        if not self._skill_manager:
+            return "[red]Skill manager is not initialized[/red]"
+        parts = shlex.split(args) if args else []
+        subcmd = parts[0].lower() if parts else "list"
+        readonly = {"list", "info"}
+        if self._plan_mode and subcmd not in readonly:
+            return "[red]Plan Mode is active: /skill can only list or show info.[/red]"
+
+        try:
+            if subcmd == "list":
+                skills = self._skill_manager.list()
+                if not skills:
+                    return "[dim]No skills installed[/dim]"
+                lines = [f"[bold cyan]Skills ({len(skills)}):[/bold cyan]"]
+                for skill in skills:
+                    marker = "[green]enabled[/green]" if skill.enabled else "[dim]disabled[/dim]"
+                    desc = f" - {skill.description}" if skill.description else ""
+                    lines.append(f"  [bold]{skill.name}[/bold] {marker}{desc}")
+                return "\n".join(lines)
+
+            if subcmd == "install":
+                if len(parts) < 2:
+                    return "[red]Usage: /skill install <local-path|github-url> [--name name][/red]"
+                source = parts[1]
+                name = _option_value(parts, "--name")
+                skill = await asyncio.to_thread(self._skill_manager.install, source, name)
+                await self._rebuild_system_prompt()
+                return f"[bold green]Skill installed:[/bold green] {skill.name}"
+
+            if subcmd in {"enable", "disable"}:
+                if len(parts) < 2:
+                    return f"[red]Usage: /skill {subcmd} <name>[/red]"
+                skill = self._skill_manager.enable(parts[1], enabled=(subcmd == "enable"))
+                await self._rebuild_system_prompt()
+                state = "enabled" if skill.enabled else "disabled"
+                return f"[bold green]Skill {state}:[/bold green] {skill.name}"
+
+            if subcmd == "remove":
+                if len(parts) < 2:
+                    return "[red]Usage: /skill remove <name>[/red]"
+                skill = await asyncio.to_thread(self._skill_manager.remove, parts[1])
+                await self._rebuild_system_prompt()
+                return f"[bold green]Skill removed:[/bold green] {skill.name}"
+
+            if subcmd == "update":
+                if len(parts) < 2:
+                    return "[red]Usage: /skill update <name>[/red]"
+                skill = await asyncio.to_thread(self._skill_manager.update, parts[1])
+                await self._rebuild_system_prompt()
+                return f"[bold green]Skill updated:[/bold green] {skill.name}"
+
+            if subcmd == "info":
+                if len(parts) < 2:
+                    return "[red]Usage: /skill info <name>[/red]"
+                return self._skill_manager.info(parts[1])
+
+            return "[red]Unknown /skill command. Use /skill list|install|enable|disable|remove|update|info[/red]"
+        except (SkillInstallError, OSError) as exc:
+            return f"[red]Skill error:[/red] {exc}"
+
+    async def _handle_mcp_command(self, args: str) -> str:
+        if not self._mcp_manager:
+            return "[red]MCP manager is not initialized[/red]"
+        parts = shlex.split(args) if args else []
+        subcmd = parts[0].lower() if parts else "list"
+        readonly = {"list", "info", "tools"}
+        if self._plan_mode and subcmd not in readonly:
+            return "[red]Plan Mode is active: /mcp can only list, show info, or show tools.[/red]"
+
+        try:
+            if subcmd == "list":
+                servers = self._mcp_manager.list()
+                if not servers:
+                    return "[dim]No MCP servers configured[/dim]"
+                lines = [f"[bold cyan]MCP servers ({len(servers)}):[/bold cyan]"]
+                for server in servers:
+                    marker = "[green]enabled[/green]" if server.enabled else "[dim]disabled[/dim]"
+                    err = f" [red]error: {server.last_error}[/red]" if server.last_error else ""
+                    lines.append(f"  [bold]{server.name}[/bold] {marker} ({server.transport}){err}")
+                return "\n".join(lines)
+
+            if subcmd == "add":
+                if len(parts) < 4 or parts[2].lower() not in {"stdio", "http", "sse"}:
+                    return "[red]Usage: /mcp add <name> stdio <command> [args...] | /mcp add <name> http|sse <url>[/red]"
+                transport = parts[2].lower()
+                if transport == "stdio":
+                    server = self._mcp_manager.add_stdio(parts[1], parts[3], args=parts[4:])
+                elif transport == "http":
+                    server = self._mcp_manager.add_http(parts[1], parts[3])
+                else:
+                    server = self._mcp_manager.add_sse(parts[1], parts[3])
+                return f"[bold green]MCP server added:[/bold green] {server.name}"
+
+            if subcmd in {"enable", "disable"}:
+                if len(parts) < 2:
+                    return f"[red]Usage: /mcp {subcmd} <name>[/red]"
+                server = self._mcp_manager.enable(parts[1], enabled=(subcmd == "enable"))
+                if server.enabled:
+                    await asyncio.to_thread(self._register_mcp_tools, False)
+                elif self._tool_registry:
+                    self._tool_registry.unregister_prefix(f"mcp__{server.name}__")
+                state = "enabled" if server.enabled else "disabled"
+                return f"[bold green]MCP server {state}:[/bold green] {server.name}"
+
+            if subcmd == "remove":
+                if len(parts) < 2:
+                    return "[red]Usage: /mcp remove <name>[/red]"
+                server = self._mcp_manager.remove(parts[1])
+                if self._tool_registry:
+                    self._tool_registry.unregister_prefix(f"mcp__{server.name}__")
+                return f"[bold green]MCP server removed:[/bold green] {server.name}"
+
+            if subcmd == "test":
+                if len(parts) < 2:
+                    return "[red]Usage: /mcp test <name>[/red]"
+                ok, message = await asyncio.to_thread(self._mcp_manager.test, parts[1])
+                if ok:
+                    await asyncio.to_thread(self._register_mcp_tools, False)
+                    return f"[bold green]MCP connected:[/bold green] {message}"
+                return f"[red]MCP test failed:[/red] {message}"
+
+            if subcmd == "tools":
+                if len(parts) < 2:
+                    return "[red]Usage: /mcp tools <name>[/red]"
+                tools = await asyncio.to_thread(self._mcp_manager.list_tools, parts[1])
+                if not tools:
+                    return "[dim]No tools discovered[/dim]"
+                lines = [f"[bold cyan]MCP tools for {parts[1]} ({len(tools)}):[/bold cyan]"]
+                for tool in tools:
+                    desc = f" - {tool.description}" if tool.description else ""
+                    lines.append(f"  [bold]{tool.name}[/bold]{desc}")
+                return "\n".join(lines)
+
+            if subcmd == "info":
+                if len(parts) < 2:
+                    return "[red]Usage: /mcp info <name>[/red]"
+                return self._mcp_manager.info(parts[1])
+
+            return "[red]Unknown /mcp command. Use /mcp list|add|enable|disable|remove|test|tools|info[/red]"
+        except (McpError, OSError) as exc:
+            return f"[red]MCP error:[/red] {exc}"
+
     async def _handle_plan_command(self) -> None:
         self._plan_mode = True
         if self._agent:
@@ -809,6 +996,7 @@ class CoomiApp(App):
                 spec=spec,
                 memory_manager=self._memory_manager,
                 memory_recall=self._memory_recall,
+                skill_manager=self._skill_manager,
                 display_name=self._display_name,
                 on_state_change=on_state_change,
             ):
@@ -870,6 +1058,7 @@ class CoomiApp(App):
         self._session.system_prompt = await build_system_prompt(
             memory_manager=self._memory_manager,
             memory_recall=self._memory_recall,
+            skill_manager=self._skill_manager,
             current_context="",
             cwd=self._cwd,
             model_display=self._display_name,
@@ -905,6 +1094,8 @@ class CoomiApp(App):
             "  [bold]/context[/bold]       设置上下文窗口大小\n"
             "  [bold]/permission[/bold]    查看/切换工具权限模式\n"
             "  [bold]/memory[/bold]        记忆管理\n"
+            "  [bold]/skill[/bold]         Skill 扩展管理\n"
+            "  [bold]/mcp[/bold]           MCP Server 管理\n"
             "  [bold]/compact[/bold]       压缩上下文\n"
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
@@ -1337,6 +1528,10 @@ class CoomiApp(App):
             command_result = _handle_memory_command(
                 self._memory_manager, stripped[7:].strip()
             )
+        elif stripped == "/skill" or stripped.startswith("/skill "):
+            command_result = await self._handle_skill_command(stripped[6:].strip())
+        elif stripped == "/mcp" or stripped.startswith("/mcp "):
+            command_result = await self._handle_mcp_command(stripped[4:].strip())
         elif stripped == "/clear":
             await self._handle_clear()
             return
@@ -1412,6 +1607,18 @@ class CoomiApp(App):
             command_result = _handle_memory_command(
                 self._memory_manager, stripped[7:].strip()
             )
+        elif stripped == "/skill" or stripped.startswith("/skill "):
+            import asyncio
+            asyncio.create_task(self._show_async_command_result(
+                self._handle_skill_command(stripped[6:].strip())
+            ))
+            return
+        elif stripped == "/mcp" or stripped.startswith("/mcp "):
+            import asyncio
+            asyncio.create_task(self._show_async_command_result(
+                self._handle_mcp_command(stripped[4:].strip())
+            ))
+            return
         elif stripped == "/clear":
             import asyncio
             asyncio.create_task(self._handle_clear())
@@ -1475,6 +1682,7 @@ class CoomiApp(App):
         system_prompt = await build_system_prompt(
             memory_manager=self._memory_manager,
             memory_recall=self._memory_recall,
+            skill_manager=self._skill_manager,
             current_context="",
             cwd=self._cwd,
             model_display=self._display_name,
@@ -1580,6 +1788,7 @@ class CoomiApp(App):
                 self._session.system_prompt = await build_system_prompt(
                     memory_manager=self._memory_manager,
                     memory_recall=self._memory_recall,
+                    skill_manager=self._skill_manager,
                     current_context=user_input,
                     cwd=self._cwd,
                     model_display=self._display_name,

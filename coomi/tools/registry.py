@@ -36,6 +36,10 @@ _TOOL_ALIASES = {
     "editfile": "Edit",
     "todowrite": "TodoWrite",
     "todo": "TodoWrite",
+    "agent": "Agent",
+    "task": "Agent",
+    "subagent": "Agent",
+    "delegate": "Agent",
     "askuserquestion": "AskUserQuestion",
     "askuser": "AskUserQuestion",
     "enterplanmode": "EnterPlanMode",
@@ -52,6 +56,15 @@ class ToolRegistry:
     def register(self, tool: BaseTool) -> None:
         """注册工具"""
         self._tools[tool.name] = tool
+
+    def unregister(self, name: str) -> None:
+        canonical = self.canonical_name(name) or name
+        self._tools.pop(canonical, None)
+
+    def unregister_prefix(self, prefix: str) -> None:
+        for tool_name in list(self._tools):
+            if tool_name.startswith(prefix):
+                self._tools.pop(tool_name, None)
 
     def get(self, name: str) -> BaseTool | None:
         """获取工具"""

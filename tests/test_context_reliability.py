@@ -22,10 +22,14 @@ from coomi.services.llm.provider import LLMProvider
 from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry, create_default_registry
+from coomi.tools.agent import AgentTool
+from coomi.tools.config import ConfigTool
 from coomi.tools.file_ops.edit import EditTool
 from coomi.tools.shell import BashTool, PowerShellTool
+from coomi.tools.task import TodoWriteTool
 from coomi.tools.user import AskUserQuestionTool
 from coomi.tools.workspace.plan_mode import ExitPlanModeTool
+from coomi.ui.tool_formatter import format_tool_display
 from coomi.ui.events import AgentError, ReasoningChunk, TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
@@ -116,6 +120,24 @@ class FakeQuestionApp:
     async def _handle_ask_questions(self, questions: list[dict]) -> dict:
         self.questions = questions
         return {0: {"option": "A", "label": "A", "other_text": None}}
+
+
+class FakeApprovalApp:
+    def __init__(self, allow: bool):
+        self.allow = allow
+        self.questions: list[dict] | None = None
+
+    async def _handle_ask_questions(self, questions: list[dict]) -> dict:
+        self.questions = questions
+        option = "allow" if self.allow else "deny"
+        label = "Allow" if self.allow else "Deny"
+        return {0: {"option": option, "label": label, "other_text": None}}
+
+
+def full_access_permissions() -> PermissionSystem:
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    return permissions
 
 
 class ParseErrorProvider(LLMProvider):
@@ -562,6 +584,65 @@ async def test_tool_executor_denies_ask_permission_without_ui():
 
 
 @pytest.mark.asyncio
+async def test_ask_approval_requires_ui_for_read_tools():
+    registry = ToolRegistry()
+    tool = CountingTool()
+    registry.register(tool)
+    executor = ToolExecutor(registry)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Read", arguments={"file_path": "x"}),
+    )
+
+    assert outcome.is_error
+    assert "Permission required" in outcome.result_text
+    assert tool.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ask_approval_runs_read_tool_only_after_explicit_allow():
+    registry = ToolRegistry()
+    tool = CountingTool(output="read ok")
+    registry.register(tool)
+    app = FakeApprovalApp(allow=True)
+    executor = ToolExecutor(registry, app_context=app)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Read", arguments={"file_path": "x"}),
+    )
+
+    assert not outcome.is_error
+    assert outcome.result_text == "read ok"
+    assert tool.calls == 1
+    assert app.questions is not None
+    assert "Allow tool 'Read' to run?" in app.questions[0]["question"]
+
+
+@pytest.mark.asyncio
+async def test_ask_approval_denies_read_tool_without_execution():
+    registry = ToolRegistry()
+    tool = CountingTool()
+    registry.register(tool)
+    app = FakeApprovalApp(allow=False)
+    executor = ToolExecutor(registry, app_context=app)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Read", arguments={"file_path": "x"}),
+    )
+
+    assert outcome.is_error
+    assert "Permission denied" in outcome.result_text
+    assert tool.calls == 0
+    assert app.questions is not None
+
+
+@pytest.mark.asyncio
 async def test_ask_user_question_bypasses_permission_prompt():
     registry = ToolRegistry()
     registry.register(AskUserQuestionTool())
@@ -621,13 +702,28 @@ def test_permission_summary_formats_questions_without_raw_dict():
     assert "{'questions'" not in summary
 
 
+def test_ask_user_question_schema_requires_option_summary_and_description():
+    option_schema = (
+        AskUserQuestionTool()
+        .get_parameters_schema()["properties"]["questions"]["items"]["properties"]["options"]["items"]
+    )
+
+    assert option_schema["required"] == ["label", "summary", "description"]
+    assert "Concise opening description" in option_schema["properties"]["summary"]["description"]
+    assert "Detailed paragraph" in option_schema["properties"]["description"]["description"]
+
+
 @pytest.mark.asyncio
 async def test_tool_executor_persists_large_results_per_session(tmp_path: Path):
     registry = ToolRegistry()
     large_output = "x" * (60 * 1024)
     tool = CountingTool(output=large_output)
     registry.register(tool)
-    executor = ToolExecutor(registry, project_path=str(tmp_path))
+    executor = ToolExecutor(
+        registry,
+        permission_system=full_access_permissions(),
+        project_path=str(tmp_path),
+    )
 
     first = await executor.execute(
         Session(id="s1"),
@@ -651,7 +747,12 @@ async def test_agent_loop_turns_invalid_tool_json_into_tool_result(tmp_path: Pat
     tool = CountingTool()
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(ParseErrorProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        ParseErrorProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "use tool")]
 
@@ -849,6 +950,98 @@ def test_text_tool_call_filter_parses_json_function_and_fenced_calls():
     assert fenced_call["arguments"] == {"file_path": "F:\\tmp\\b.txt"}
 
 
+def test_text_tool_call_filter_parses_task_agent_aliases():
+    xml_call = parse_text_tool_call(
+        "<tool_call><function=Task><parameter=description>Inspect aliases</tool_call>"
+    )
+    assert xml_call is not None
+    assert xml_call["name"] == "Task"
+    assert xml_call["arguments"] == {
+        "description": "Inspect aliases",
+        "prompt": "Inspect aliases",
+    }
+
+    json_filter = TextToolCallFilter()
+    visible, calls = json_filter.feed(
+        'Before {"name":"Task","arguments":{"description":"Inspect aliases"}} after'
+    )
+    assert visible == "Before  after"
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Task"
+    assert calls[0]["arguments"] == {
+        "description": "Inspect aliases",
+        "prompt": "Inspect aliases",
+    }
+
+    function_filter = TextToolCallFilter()
+    visible, calls = function_filter.feed('Run Task(description="Inspect aliases") now')
+    assert visible == "Run  now"
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Task"
+    assert calls[0]["arguments"] == {
+        "description": "Inspect aliases",
+        "prompt": "Inspect aliases",
+    }
+
+    dsml_filter = TextToolCallFilter()
+    visible, calls = dsml_filter.feed(
+        '<| | DSML | | tool_calls><| | DSML | | invoke name="Task">'
+        '<| | DSML | | parameter name="instructions" string="true">Inspect aliases'
+        '</| | DSML | | parameter></| | DSML | | invoke></| | DSML | | tool_calls>'
+    )
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0]["name"] == "Task"
+    assert calls[0]["arguments"] == {
+        "prompt": "Inspect aliases",
+        "description": "Inspect aliases",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "<tool_call><function=Task><parameter=description>Inspect aliases</tool_call>",
+        '{"name":"Task","arguments":{"description":"Inspect aliases"}}',
+        'Task(description="Inspect aliases")',
+        (
+            '<| | DSML | | tool_calls><| | DSML | | invoke name="Task">'
+            '<| | DSML | | parameter name="instructions" string="true">Inspect aliases'
+            '</| | DSML | | parameter></| | DSML | | invoke></| | DSML | | tool_calls>'
+        ),
+    ],
+)
+async def test_task_text_tool_calls_execute_to_agent_alias(tmp_path: Path, raw: str):
+    parsed = parse_text_tool_call(raw)
+    assert parsed is not None
+    registry = ToolRegistry()
+    registry.register(AgentTool())
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="call_1",
+            name=parsed["name"],
+            arguments=parsed["arguments"],
+            source=parsed["source"],
+        ),
+    )
+
+    assert outcome.tool_call.name == "Agent"
+    assert outcome.is_error
+    assert "Tool 'Task' not found" not in outcome.result_text
+    assert "Permission required" in outcome.result_text
+
+
 def test_text_tool_call_filter_turns_malformed_calls_into_correction():
     stream_filter = TextToolCallFilter()
     visible, calls = stream_filter.feed('{"name":"Read","arguments":')
@@ -925,6 +1118,27 @@ def test_default_registry_contains_core_tools_and_aliases():
     assert registry.canonical_name("pwsh") == "PowerShell"
     assert registry.canonical_name("read_file") == "Read"
     assert registry.canonical_name("editfile") == "Edit"
+    assert registry.canonical_name("Task") == "Agent"
+    assert registry.canonical_name("task") == "Agent"
+    assert registry.canonical_name("SubAgent") == "Agent"
+    assert registry.canonical_name("subagent") == "Agent"
+    assert registry.canonical_name("delegate") == "Agent"
+
+
+def test_default_registry_tool_schema_required_fields_are_consistent():
+    registry = create_default_registry()
+    schemas = {
+        item["function"]["name"]: item["function"]["parameters"]
+        for item in registry.get_tool_definitions()
+    }
+
+    assert schemas["Read"]["required"] == ["file_path"]
+    assert schemas["Write"]["required"] == ["file_path", "content"]
+    assert schemas["Edit"]["required"] == ["file_path", "old_string", "new_string"]
+    assert schemas["Bash"]["required"] == ["command"]
+    assert schemas["PowerShell"]["required"] == ["command"]
+    assert schemas["WebFetch"]["required"] == ["url"]
+    assert schemas["Agent"]["required"] == ["description"]
 
 
 def test_edit_tool_rejects_empty_old_string(tmp_path: Path):
@@ -993,7 +1207,12 @@ async def test_agent_loop_executes_mimo_tool_code_without_leaking_markup(tmp_pat
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(MimoToolCodeProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        MimoToolCodeProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search project files")]
 
@@ -1023,7 +1242,12 @@ async def test_agent_loop_executes_json_text_tool_call_without_leaking_markup(tm
     tool = CountingTool(output="read result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(JsonTextToolCallProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        JsonTextToolCallProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please read a file")]
 
@@ -1049,6 +1273,7 @@ async def test_agent_loop_executes_function_text_tool_call_without_leaking_marku
         FunctionTextToolCallProvider(),
         registry,
         project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
     )
 
     events = [event async for event in agent.run_stream(session, "please run a command")]
@@ -1071,7 +1296,12 @@ async def test_agent_loop_executes_dsml_tool_call_without_leaking_markup(tmp_pat
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(DsmlToolCallProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        DsmlToolCallProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search project files")]
 
@@ -1101,7 +1331,12 @@ async def test_agent_loop_captures_dsml_when_provider_protocol_is_native(tmp_pat
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(NativeConfiguredDsmlProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        NativeConfiguredDsmlProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search project files")]
 
@@ -1126,7 +1361,12 @@ async def test_agent_loop_logs_when_text_tool_mode_disabled_but_content_looks_li
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(DisabledTextToolCodeProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        DisabledTextToolCodeProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     with caplog.at_level("WARNING", logger="coomi.engine.loop"):
         events = [event async for event in agent.run_stream(session, "please search project files")]
@@ -1143,7 +1383,12 @@ async def test_agent_loop_recovers_from_malformed_text_tool_call(tmp_path: Path)
     tool = CountingTool(output="read result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(MalformedThenValidTextToolProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        MalformedThenValidTextToolProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please read a file")]
 
@@ -1163,7 +1408,12 @@ async def test_agent_loop_stops_repeated_malformed_text_tool_calls(tmp_path: Pat
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
     provider = AlwaysMalformedTextToolProvider()
-    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        provider,
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please read a file")]
 
@@ -1182,7 +1432,12 @@ async def test_agent_loop_stops_repeated_identical_tool_calls(tmp_path: Path):
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
     provider = RepeatingReadToolProvider()
-    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        provider,
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please read a file")]
 
@@ -1202,7 +1457,12 @@ async def test_agent_loop_stops_repeated_low_information_results(tmp_path: Path)
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
     provider = RepeatingReadToolProvider(vary_arguments=True)
-    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        provider,
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search files")]
 
@@ -1221,7 +1481,12 @@ async def test_agent_loop_executes_text_tool_call_when_native_tools_omitted(tmp_
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(MimoToolCodeProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        MimoToolCodeProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "hi")]
 
@@ -1237,7 +1502,12 @@ async def test_agent_loop_executes_reasoning_text_tool_call_without_leaking_mark
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(ReasoningDsmlToolCallProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        ReasoningDsmlToolCallProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search project files")]
 
@@ -1257,7 +1527,12 @@ async def test_agent_loop_respects_provider_disabled_text_tool_mode(tmp_path: Pa
     tool = GlobCountingTool(output="glob result")
     registry.register(tool)
     session = Session(id="s", system_prompt="sys")
-    agent = AgentLoop(DisabledTextToolCodeProvider(), registry, project_path=str(tmp_path))
+    agent = AgentLoop(
+        DisabledTextToolCodeProvider(),
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
 
     events = [event async for event in agent.run_stream(session, "please search project files")]
 
@@ -1337,7 +1612,12 @@ async def test_plan_mode_allows_read_tools(tmp_path: Path):
     registry = ToolRegistry()
     tool = CountingTool(output="read ok")
     registry.register(tool)
-    executor = ToolExecutor(registry, project_path=str(tmp_path), read_only_mode=True)
+    executor = ToolExecutor(
+        registry,
+        permission_system=full_access_permissions(),
+        project_path=str(tmp_path),
+        read_only_mode=True,
+    )
     session = Session(id="s")
 
     outcome = await executor.execute(
@@ -1459,11 +1739,128 @@ async def test_tool_executor_forces_ask_for_text_fallback_write_even_full_access
     assert tool.calls == 0
 
 
+@pytest.mark.asyncio
+async def test_tool_executor_resolves_task_alias_to_agent(tmp_path: Path):
+    registry = ToolRegistry()
+    registry.register(AgentTool())
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="call_1",
+            name="Task",
+            arguments={"description": "Inspect aliases"},
+        ),
+    )
+
+    assert outcome.tool_call.name == "Agent"
+    assert outcome.is_error
+    assert "Tool 'Task' not found" not in outcome.result_text
+    assert "Agent/Task delegation is recognized" in outcome.result_text
+    assert "Inspect aliases" in outcome.result_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        (
+            TodoWriteTool(),
+            {
+                "todos": [
+                    {
+                        "content": "Check aliases",
+                        "status": "pending",
+                        "activeForm": "Checking aliases",
+                    }
+                ]
+            },
+        ),
+        (ConfigTool(), {"setting": "model", "value": "test-model"}),
+        (ExitPlanModeTool(), {}),
+        (AgentTool(), {"description": "Inspect aliases"}),
+    ],
+)
+async def test_tool_executor_forces_ask_for_text_fallback_write_access_tools(
+    tmp_path: Path,
+    tool: BaseTool,
+    arguments: dict[str, Any],
+):
+    registry = ToolRegistry()
+    registry.register(tool)
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="call_1",
+            name=tool.name,
+            arguments=arguments,
+            source="text_fallback",
+        ),
+    )
+
+    assert outcome.is_error
+    assert "Permission required" in outcome.result_text
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_does_not_force_ask_for_text_fallback_read_only_tool(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read ok")
+    registry.register(tool)
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="call_1",
+            name="Read",
+            arguments={"file_path": "x"},
+            source="text_fallback",
+        ),
+    )
+
+    assert not outcome.is_error
+    assert outcome.result_text == "read ok"
+    assert tool.calls == 1
+
+
+def test_tool_formatter_displays_agent_canonical_name():
+    assert format_tool_display("Agent", {"description": "Inspect aliases"}) == "Agent: Inspect aliases"
+
+
 def test_permission_modes_change_tool_policy():
     permissions = PermissionSystem()
 
     permissions.set_mode(PermissionMode.ASK_APPROVAL)
-    assert permissions.check_permission("Read", {"file_path": "x"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("Read", {"file_path": "x"}) == PermissionLevel.ASK
+    assert permissions.check_permission("Glob", {"pattern": "*"}) == PermissionLevel.ASK
+    assert permissions.check_permission("Grep", {"pattern": "x"}) == PermissionLevel.ASK
+    assert permissions.check_permission("Write", {"file_path": "x"}) == PermissionLevel.ASK
+    assert permissions.check_permission("Bash", {"command": "python -m pytest"}) == PermissionLevel.ASK
     assert permissions.check_permission("AskUserQuestion", {"questions": []}) == PermissionLevel.AUTO
     assert permissions.check_permission("WebFetch", {"url": "https://example.com"}) == PermissionLevel.ASK
 

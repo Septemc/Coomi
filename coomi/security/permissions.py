@@ -29,7 +29,7 @@ PERMISSION_MODE_LABELS = {
 
 
 PERMISSION_MODE_DESCRIPTIONS = {
-    PermissionMode.ASK_APPROVAL: "Always ask to edit files and use the internet",
+    PermissionMode.ASK_APPROVAL: "Always ask before tools read, write, run commands, or use the internet",
     PermissionMode.APPROVE_FOR_ME: "Only ask for actions detected as potentially unsafe",
     PermissionMode.FULL_ACCESS: "Unrestricted access to tools",
 }
@@ -97,7 +97,7 @@ class PermissionSystem:
             return PermissionLevel.AUTO
 
         if self._mode == PermissionMode.ASK_APPROVAL:
-            if tool_name in {"Read", "Glob", "Grep", "AskUserQuestion"}:
+            if tool_name == "AskUserQuestion":
                 return PermissionLevel.AUTO
             return PermissionLevel.ASK
 

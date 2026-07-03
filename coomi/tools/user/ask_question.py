@@ -28,7 +28,9 @@ class AskUserQuestionTool(BaseTool):
         "The tool blocks your execution until the user answers.\n\n"
         "Usage guidelines:\n"
         "- Provide 1-4 questions, each with a short header (<=4 chars for the nav bar)\n"
-        "- Provide 2-4 options per question with clear labels and descriptions\n"
+        "- Provide 2-4 options per question\n"
+        "- Each option must include a short label, a concise summary, and a detailed paragraph\n"
+        "- Keep option labels brief; put the immediate impact in summary and tradeoffs in description\n"
         "- Set a recommendation on questions where you have a strong preference\n"
         "- Do NOT use for trivial decisions you can make yourself"
     )
@@ -57,11 +59,30 @@ class AskUserQuestionTool(BaseTool):
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "label": {"type": "string"},
-                                        "description": {"type": "string"},
-                                        "preview": {"type": "string"},
+                                        "label": {
+                                            "type": "string",
+                                            "description": "Short option name, usually 2-6 words.",
+                                        },
+                                        "summary": {
+                                            "type": "string",
+                                            "description": (
+                                                "Concise opening description shown beside the label. "
+                                                "State the option's main effect in one short phrase."
+                                            ),
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": (
+                                                "Detailed paragraph explaining what this option means, "
+                                                "including implications, tradeoffs, and when to choose it."
+                                            ),
+                                        },
+                                        "preview": {
+                                            "type": "string",
+                                            "description": "Deprecated alias for summary; prefer summary.",
+                                        },
                                     },
-                                    "required": ["label", "description"],
+                                    "required": ["label", "summary", "description"],
                                 },
                                 "minItems": 2,
                                 "maxItems": 4,

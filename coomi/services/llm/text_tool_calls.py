@@ -54,6 +54,7 @@ Grep: pattern, path
 WebSearch: query
 WebFetch: url
 TodoWrite: todos
+Agent/Task: description, prompt
 AskUserQuestion: questions
 """
 
@@ -75,6 +76,11 @@ _DIRECT_TOOL_TAGS = (
     "todo",
     "todo_write",
     "todowrite",
+    "agent",
+    "task",
+    "sub_agent",
+    "subagent",
+    "delegate",
     "ask_user",
     "ask_user_question",
     "askuserquestion",
@@ -113,6 +119,10 @@ _KNOWN_TOOL_NAME_ALIASES = {
     "fetchurl",
     "todowrite",
     "todo",
+    "agent",
+    "task",
+    "subagent",
+    "delegate",
     "askuserquestion",
     "askuser",
     "planmode",
@@ -604,6 +614,11 @@ def _single_tag_argument_name(tag: str) -> str | None:
         "webfetch": "url",
         "write": "file_path",
         "edit": "file_path",
+        "agent": "prompt",
+        "task": "prompt",
+        "sub_agent": "prompt",
+        "subagent": "prompt",
+        "delegate": "prompt",
     }.get(tag)
 
 
@@ -856,6 +871,10 @@ def _arguments_from_function_call(
         "searchweb": ["query"],
         "webfetch": ["url", "prompt"],
         "fetchurl": ["url", "prompt"],
+        "agent": ["description", "prompt"],
+        "task": ["description", "prompt"],
+        "subagent": ["description", "prompt"],
+        "delegate": ["description", "prompt"],
     }.get(normalized_name, [])
 
     arguments = dict(keyword)
@@ -895,7 +914,24 @@ def _normalize_argument_names(tool_name: str, arguments: dict[str, Any]) -> dict
         elif normalized_name in {"webfetch", "fetchurl"}:
             if normalized_key in {"href", "link"}:
                 target_key = "url"
+        elif normalized_name in {"agent", "task", "subagent", "delegate"}:
+            if normalized_key in {"task", "input", "instructions", "instruction"}:
+                target_key = "prompt"
+            elif normalized_key in {"summary", "title", "name"}:
+                target_key = "description"
         normalized[target_key] = value
+    if (
+        normalized_name in {"agent", "task", "subagent", "delegate"}
+        and "prompt" not in normalized
+        and "description" in normalized
+    ):
+        normalized["prompt"] = normalized["description"]
+    if (
+        normalized_name in {"agent", "task", "subagent", "delegate"}
+        and "description" not in normalized
+        and "prompt" in normalized
+    ):
+        normalized["description"] = normalized["prompt"]
     return normalized
 
 
