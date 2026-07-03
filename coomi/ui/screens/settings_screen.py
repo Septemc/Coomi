@@ -101,11 +101,11 @@ class SettingsScreen(ModalScreen[Optional[str]]):
             "[dim]提示：Plan Mode 下只能查看或规划，安装 Skill、添加 MCP、修改 Provider 需要退出 Plan Mode 后执行。[/dim]"
         )
         direct_paste = (
-            "\n\n[bold]Direct paste shortcuts[/bold]\n"
-            "Provider JSON: paste a Provider JSON object into the input box to add, activate, and refresh the LLM runtime.\n"
-            "Skill URL/path: paste a GitHub Skill URL or local Skill path into the input box to install, repair, enable, and refresh Skill context.\n"
-            "MCP JSON/URL/stdio: paste MCP JSON, an MCP URL, or an MCP stdio command into the input box to configure, test, and register tools.\n"
-            "Plan Mode: direct paste only returns an execution plan and never writes files, installs Skills, or enables MCP servers.\n"
+            "\n\n[bold]输入框直接配置[/bold]\n"
+            "Provider JSON：把 Provider JSON 直接粘贴到输入框发送，Coomi 会自动添加、激活并刷新 LLM 运行配置。\n"
+            "Skill 链接/路径：把 GitHub Skill 链接或本地 Skill 路径粘贴到输入框发送，Coomi 会自动安装、修复、启用并刷新 Skill 上下文。\n"
+            "MCP JSON/URL/stdio：把 MCP JSON、MCP URL 或 MCP stdio 命令粘贴到输入框发送，Coomi 会自动配置、测试并注册工具。\n"
+            "Plan Mode：直接粘贴只会解析并给出执行计划，不会写文件、安装 Skill 或启用 MCP。\n"
         )
         return selected_guide + quick_reference + direct_paste
 

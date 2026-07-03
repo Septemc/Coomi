@@ -199,8 +199,8 @@ class WelcomePanel(Widget):
         guide.append("操作指南\n", style="bold cyan")
         guide.append(f"{model} · {tools}\n\n", style="dim")
         if width < 46:
-            guide.append("Paste Provider JSON to auto-config LLM.\n")
-            guide.append("Paste Skill URL/path or MCP config.\n")
+            guide.append("粘贴 Provider JSON 自动配置 LLM。\n")
+            guide.append("粘贴 Skill 链接/路径或 MCP 配置。\n")
             guide.append("Enter 发送，Shift+Enter 换行。\n")
             guide.append("/model 模型，/context 上下文。\n")
             guide.append("/clear 新会话，↑↓ 选历史。\n")
@@ -210,9 +210,9 @@ class WelcomePanel(Widget):
             guide.append("Ctrl+P 命令面板。\n")
             guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
         else:
-            guide.append("Paste Provider JSON in the input box to add, activate, and refresh LLM.\n")
-            guide.append("Paste Skill URL/path to install, repair, enable, and refresh Skill context.\n")
-            guide.append("Paste MCP JSON/URL/stdio command to configure, test, and register tools.\n")
+            guide.append("在输入框粘贴 Provider JSON，可自动添加、激活并刷新 LLM。\n")
+            guide.append("粘贴 Skill 链接/本地路径，可自动安装、修复、启用并刷新 Skill 上下文。\n")
+            guide.append("粘贴 MCP JSON/URL/stdio 命令，可自动配置、测试并注册工具。\n")
             guide.append("Enter 发送消息，Shift+Enter 换行。\n")
             guide.append("/model 切换模型，/context 调整上下文窗口。\n")
             guide.append("/permission 查看权限，Shift+Tab 快速切换。\n")

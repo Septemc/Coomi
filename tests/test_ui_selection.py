@@ -308,8 +308,9 @@ def test_welcome_panel_mentions_direct_paste_auto_configuration():
     rendered = console.export_text()
 
     assert "Provider JSON" in rendered
-    assert "Skill URL/path" in rendered
+    assert "Skill 链接/本地路径" in rendered
     assert "MCP JSON/URL/stdio" in rendered
+    assert "自动配置、测试并注册工具" in rendered
 
 
 def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
@@ -319,7 +320,8 @@ def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
     assert "providers.json" in llm_guide
     assert "tool_protocol" in llm_guide
     assert "Provider JSON" in llm_guide
-    assert "input box" in llm_guide
+    assert "输入框直接配置" in llm_guide
+    assert "自动添加、激活并刷新 LLM" in llm_guide
     assert "保存后配置会自动生效" in llm_guide
 
     screen._selected = 1
@@ -327,7 +329,7 @@ def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
     assert "/skill install" in skill_guide
     assert "SKILL.md" in skill_guide
     assert "GitHub" in skill_guide
-    assert "Skill URL/path" in skill_guide
+    assert "Skill 链接/路径" in skill_guide
 
     screen._selected = 2
     mcp_guide = screen._render_guide()
