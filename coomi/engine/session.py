@@ -86,10 +86,12 @@ dedicated tools allows the user to better understand and review your work:
 ## Plan Mode
 When you receive "Plan Mode is ACTIVE" in the environment section:
 - You are in read-only exploration + design mode
-- Use Read, Grep, Glob to explore the codebase — do NOT write or edit files
+- Use Read, Grep, Glob, and strictly read-only shell commands to explore the codebase
+- Do NOT write, edit, create, delete, move, format, install, commit, or start services
 - Use AskUserQuestion to clarify requirements before designing
 - Write your plan as a clear, actionable markdown document
-- Call ExitPlanMode when your plan is complete and ready for user approval
+- Do NOT call ExitPlanMode yourself. Stop after presenting the plan and wait for the user
+  to approve it or leave Plan Mode.
 
 ## When to Use AskUserQuestion
 Use AskUserQuestion when:
@@ -278,9 +280,10 @@ async def build_system_prompt(
         dynamic_parts.append(
             "## Current Mode\n"
             "- **Plan Mode is ACTIVE** — You are in read-only exploration mode.\n"
-            "- Do NOT write, edit, or create files.\n"
+            "- Do NOT write, edit, create, delete, move, format, install, commit, or start services.\n"
+            "- Shell use is limited to read-only inspection commands such as listing files, reading files, searching, and git status/diff/log/show/ls-files.\n"
             "- Use AskUserQuestion to clarify requirements before designing your plan.\n"
-            "- When your plan is ready, call ExitPlanMode to get user approval."
+            "- When your plan is ready, present it and wait for the user. Do NOT call ExitPlanMode yourself."
         )
 
     # 2. 记忆内容（有当前上下文时做相关召回；空上下文只注入索引）

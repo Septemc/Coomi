@@ -42,6 +42,7 @@ MAX_CONSECUTIVE_FAILURES = 5   # 连续失败上限（达到后强制注入警�
 MAX_SAME_TOOL_CALL = 3         # 同一工具同一参数连续调用上限
 LOOP_WARN_THRESHOLD = 3        # 循环检测警告阈值
 LOOP_FORCE_BREAK_THRESHOLD = 5 # 循环检测强制中断阈值
+MAX_CONSECUTIVE_LOW_INFO_RESULTS = 8
 MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
 MAX_MALFORMED_TEXT_TOOL_RETRIES = 3
 logger = logging.getLogger(__name__)
@@ -205,6 +206,22 @@ class LoopDetector:
     def reset(self) -> None:
         """重置检测器"""
         self._history.clear()
+
+
+def _is_low_information_tool_result(result_text: str) -> bool:
+    normalized = " ".join((result_text or "").casefold().split())
+    if not normalized:
+        return True
+    low_info_markers = (
+        "(tool completed with no output)",
+        "no matches found",
+        "no files found",
+        "permission required for tool",
+        "permission denied for tool",
+        "plan mode is active:",
+        "invalid json arguments",
+    )
+    return any(marker in normalized for marker in low_info_markers)
 
 
 class AgentLoop:
@@ -405,6 +422,7 @@ class AgentLoop:
 
         effective_iteration = 0       # 有效迭代计数
         consecutive_failures = 0      # 连续失败计数（独立于有效迭代）
+        consecutive_low_info_results = 0
         total_tool_calls = 0          # 总工具调用次数
         total_tool_errors = 0         # 总工具错误次数
         omit_tools_for_first_turn = _should_omit_tools_for_input(user_input)
@@ -530,6 +548,7 @@ class AgentLoop:
                 )
 
                 force_break = False
+                stop_for_no_progress = False
                 stop_for_malformed_text_tools = False
 
                 for batch in self._partition_tool_calls(tool_calls):
@@ -557,6 +576,14 @@ class AgentLoop:
                         )
                         is_stuck = self._loop_detector.is_stuck()
 
+                        warning = self._build_loop_warning(
+                            tool_call.name,
+                            consecutive_count,
+                            is_stuck,
+                        )
+                        if warning:
+                            result_text += warning
+
                         if is_error:
                             total_tool_errors += 1
                             consecutive_failures += 1
@@ -570,15 +597,6 @@ class AgentLoop:
                                         "Please continue with a normal response or use a valid native tool call."
                                     )
 
-                            # 注入循环检测警告
-                            warning = self._build_loop_warning(
-                                tool_call.name,
-                                consecutive_count,
-                                is_stuck,
-                            )
-                            if warning:
-                                result_text += warning
-
                             # 连续失败上限提示必须写进同一个 tool result，
                             # 不能追加第二个同 ID 的 tool result。
                             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -587,19 +605,31 @@ class AgentLoop:
                                     f"请认真分析错误原因，尝试完全不同的方法。"
                                 )
                                 consecutive_failures = 0
-
-                            # 强制中断检查
-                            if consecutive_count >= LOOP_FORCE_BREAK_THRESHOLD:
-                                force_break = True
-                                break_msg = self._build_force_break_message(
-                                    tool_call.name,
-                                    consecutive_count,
-                                )
-                                result_text += f"\n\n{break_msg}"
                         else:
                             # 工具成功 → 重置连续失败计数
                             consecutive_failures = 0
                             malformed_text_tool_retries = 0
+
+                        if _is_low_information_tool_result(result_text):
+                            consecutive_low_info_results += 1
+                            if consecutive_low_info_results >= MAX_CONSECUTIVE_LOW_INFO_RESULTS:
+                                stop_for_no_progress = True
+                                result_text += (
+                                    "\n\nCoomi stopped this run after repeated low-information "
+                                    f"tool results ({consecutive_low_info_results} in a row). "
+                                    "Please summarize what was learned, ask the user for direction, "
+                                    "or switch to a materially different approach."
+                                )
+                        else:
+                            consecutive_low_info_results = 0
+
+                        if consecutive_count >= LOOP_FORCE_BREAK_THRESHOLD:
+                            force_break = True
+                            break_msg = self._build_force_break_message(
+                                tool_call.name,
+                                consecutive_count,
+                            )
+                            result_text += f"\n\n{break_msg}"
 
                         yield ToolDone(
                             tool_name=tool_call.name,
@@ -608,10 +638,10 @@ class AgentLoop:
                             is_error=is_error,
                         )
                         add_tool_result(session, tool_call.id, result_text)
-                        if stop_for_malformed_text_tools:
+                        if stop_for_malformed_text_tools or stop_for_no_progress or force_break:
                             break
 
-                    if stop_for_malformed_text_tools:
+                    if stop_for_malformed_text_tools or stop_for_no_progress or force_break:
                         break
 
                 # 工具执行后取消检查
@@ -630,11 +660,25 @@ class AgentLoop:
                     )
                     return
 
+                if stop_for_no_progress:
+                    yield AgentError(
+                        message=(
+                            "Stopped repeated low-information tool results before hitting "
+                            f"MAX_ITERATIONS ({consecutive_low_info_results} consecutive results)."
+                        ),
+                        is_fatal=False,
+                    )
+                    return
+
                 if force_break:
-                    # 强制中断：不继续工具调用，让 LLM 重新思考
-                    # 不退出 run_stream，而是让 LLM 在下一轮迭代中看到 break 消息
-                    self._loop_detector.reset()
-                    consecutive_failures = 0
+                    yield AgentError(
+                        message=(
+                            "Stopped repeated tool call loop before hitting MAX_ITERATIONS. "
+                            "The session was saved; continue with a different approach."
+                        ),
+                        is_fatal=False,
+                    )
+                    return
 
                 compress_event = await self._check_compress(session)
                 if compress_event:

@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from coomi.engine.loop import AgentLoop, _should_omit_tools_for_input
+from coomi.engine.loop import (
+    AgentLoop,
+    LOOP_FORCE_BREAK_THRESHOLD,
+    MAX_CONSECUTIVE_LOW_INFO_RESULTS,
+    _should_omit_tools_for_input,
+)
 from coomi.engine.loop_runner import _step_completion_confirmed
 from coomi.engine.tool_executor import ToolExecutor, _summarize_arguments
 from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
@@ -20,7 +25,8 @@ from coomi.tools.registry import ToolRegistry, create_default_registry
 from coomi.tools.file_ops.edit import EditTool
 from coomi.tools.shell import BashTool, PowerShellTool
 from coomi.tools.user import AskUserQuestionTool
-from coomi.ui.events import ReasoningChunk, TextChunk
+from coomi.tools.workspace.plan_mode import ExitPlanModeTool
+from coomi.ui.events import AgentError, ReasoningChunk, TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
 
@@ -90,6 +96,8 @@ class WebSearchCountingTool(CountingTool):
 
 class BashCountingTool(CountingTool):
     name = "Bash"
+    access = ToolAccess.WRITE
+    concurrency = ToolConcurrency.BLOCKING
 
     def get_parameters_schema(self) -> dict[str, Any]:
         return {
@@ -389,6 +397,39 @@ class AlwaysMalformedTextToolProvider(MalformedThenValidTextToolProvider):
             "type": "content",
             "content": '{"name":"Read","arguments":',
         }
+
+
+class RepeatingReadToolProvider(LLMProvider):
+    def __init__(self, vary_arguments: bool = False):
+        self.calls = 0
+        self.vary_arguments = vary_arguments
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        file_path = f"missing-{self.calls}.txt" if self.vary_arguments else "same.txt"
+        yield {
+            "type": "tool_call",
+            "data": {
+                "id": f"read_{self.calls}",
+                "name": "Read",
+                "arguments": {"file_path": file_path},
+            },
+        }
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "disabled"
 
 
 class DisabledTextToolCodeProvider(MimoToolCodeProvider):
@@ -1135,6 +1176,46 @@ async def test_agent_loop_stops_repeated_malformed_text_tool_calls(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_stops_repeated_identical_tool_calls(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    provider = RepeatingReadToolProvider()
+    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please read a file")]
+
+    assert provider.calls == LOOP_FORCE_BREAK_THRESHOLD
+    assert tool.calls == LOOP_FORCE_BREAK_THRESHOLD
+    assert any(
+        isinstance(event, AgentError)
+        and event.message.startswith("Stopped repeated tool call loop")
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_stops_repeated_low_information_results(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="No matches found")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    provider = RepeatingReadToolProvider(vary_arguments=True)
+    agent = AgentLoop(provider, registry, project_path=str(tmp_path))
+
+    events = [event async for event in agent.run_stream(session, "please search files")]
+
+    assert provider.calls == MAX_CONSECUTIVE_LOW_INFO_RESULTS
+    assert tool.calls == MAX_CONSECUTIVE_LOW_INFO_RESULTS
+    assert any(
+        isinstance(event, AgentError)
+        and event.message.startswith("Stopped repeated low-information tool results")
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_executes_text_tool_call_when_native_tools_omitted(tmp_path: Path):
     registry = ToolRegistry()
     tool = GlobCountingTool(output="glob result")
@@ -1249,6 +1330,104 @@ async def test_plan_mode_blocks_write_tools_before_permission(tmp_path: Path):
     assert outcome.is_error
     assert "Plan Mode is active" in outcome.result_text
     assert tool.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_allows_read_tools(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read ok")
+    registry.register(tool)
+    executor = ToolExecutor(registry, project_path=str(tmp_path), read_only_mode=True)
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Read", arguments={"file_path": "x"}),
+    )
+
+    assert not outcome.is_error
+    assert outcome.result_text == "read ok"
+    assert tool.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_blocks_exit_plan_mode_tool(tmp_path: Path):
+    registry = ToolRegistry()
+    registry.register(ExitPlanModeTool())
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+        read_only_mode=True,
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="ExitPlanMode", arguments={}),
+    )
+
+    assert outcome.is_error
+    assert "Plan Mode is active" in outcome.result_text
+    assert "must leave Plan Mode" in outcome.result_text
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_shell_allows_read_only_and_blocks_writes(tmp_path: Path):
+    registry = ToolRegistry()
+    shell = BashCountingTool(output="shell ok")
+    registry.register(shell)
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+        read_only_mode=True,
+    )
+    session = Session(id="s")
+
+    allowed = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Bash", arguments={"command": "git status --short"}),
+    )
+    denied = await executor.execute(
+        session,
+        ToolCall(id="call_2", name="Bash", arguments={"command": "echo hi > changed.txt"}),
+    )
+
+    assert not allowed.is_error
+    assert allowed.result_text == "shell ok"
+    assert denied.is_error
+    assert "Plan Mode is active" in denied.result_text
+    assert shell.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_non_plan_full_access_write_still_executes(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = WriteCountingTool(output="write ok")
+    registry.register(tool)
+    permissions = PermissionSystem()
+    permissions.set_mode(PermissionMode.FULL_ACCESS)
+    executor = ToolExecutor(
+        registry,
+        permission_system=permissions,
+        project_path=str(tmp_path),
+        read_only_mode=False,
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(id="call_1", name="Write", arguments={"file_path": "x"}),
+    )
+
+    assert not outcome.is_error
+    assert outcome.result_text == "write ok"
+    assert tool.calls == 1
 
 
 @pytest.mark.asyncio

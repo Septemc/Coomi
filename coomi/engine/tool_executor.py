@@ -20,6 +20,69 @@ from ..types import Session, ToolCall
 LARGE_RESULT_THRESHOLD = 50 * 1024
 PREVIEW_CHARS = 4 * 1024
 TEXT_FALLBACK_FORCE_ASK_TOOLS = {"Write", "Edit", "Bash", "PowerShell", "Agent"}
+PLAN_MODE_ALLOWED_SHELL_COMMANDS = {
+    "cat",
+    "dir",
+    "find",
+    "findstr",
+    "grep",
+    "get-childitem",
+    "get-content",
+    "get-location",
+    "git",
+    "head",
+    "ls",
+    "pwd",
+    "rg",
+    "select-object",
+    "select-string",
+    "tail",
+    "test-path",
+    "type",
+    "where-object",
+}
+PLAN_MODE_ALLOWED_GIT_SUBCOMMANDS = {
+    "diff",
+    "log",
+    "ls-files",
+    "show",
+    "status",
+}
+PLAN_MODE_BLOCKED_SHELL_TOKENS = (
+    ">",
+    ">>",
+    "2>",
+    "2>>",
+    "1>",
+    "1>>",
+    "*>",
+    "Out-File",
+    "Set-Content",
+    "Add-Content",
+    "Remove-Item",
+    "Move-Item",
+    "Copy-Item",
+    "New-Item",
+    "Rename-Item",
+    "Invoke-Expression",
+    "Start-Process",
+    "git commit",
+    "git checkout",
+    "git reset",
+    "git restore",
+    "git clean",
+    "git switch",
+    "git add",
+    "git push",
+    "git pull",
+    "git merge",
+    "git rebase",
+    "-delete",
+    " tee ",
+    " rm ",
+    " del ",
+    " erase ",
+)
 
 
 @dataclass
@@ -100,7 +163,7 @@ class ToolExecutor:
                 persist=False,
             )
 
-        if self.read_only_mode and tool.access != ToolAccess.READ_ONLY and tool.name != "ExitPlanMode":
+        if self.read_only_mode and not self._is_allowed_in_read_only_mode(tool, tool_call.arguments):
             return self._outcome(
                 session,
                 tool_call,
@@ -109,7 +172,8 @@ class ToolExecutor:
                     "",
                     (
                         f"Plan Mode is active: tool '{tool.name}' is not allowed because it "
-                        "can modify state. Use read-only tools, AskUserQuestion, or ExitPlanMode."
+                        "can modify state. Use read-only tools or AskUserQuestion. The user "
+                        "must leave Plan Mode before any implementation or write operation."
                     ),
                 ),
                 start,
@@ -242,6 +306,13 @@ class ToolExecutor:
 
         return None
 
+    def _is_allowed_in_read_only_mode(self, tool: BaseTool, arguments: dict[str, Any]) -> bool:
+        if tool.access == ToolAccess.READ_ONLY:
+            return True
+        if tool.name in {"Bash", "PowerShell"}:
+            return _is_read_only_shell_command(str(arguments.get("command", "")))
+        return False
+
     def _outcome(
         self,
         session: Session,
@@ -311,6 +382,51 @@ def _matches_json_type(value: Any, expected_type: str | list[str]) -> bool:
     if expected_type == "null":
         return value is None
     return True
+
+
+def _is_read_only_shell_command(command: str) -> bool:
+    normalized = " ".join((command or "").strip().split())
+    if not normalized:
+        return False
+
+    lowered = normalized.casefold()
+    if any(token.casefold() in lowered for token in PLAN_MODE_BLOCKED_SHELL_TOKENS):
+        return False
+    if re.search(r"(^|[^&])(&&|\|\||;|`|\$\()", normalized):
+        return False
+
+    segments = [segment.strip() for segment in normalized.split("|")]
+    if not segments:
+        return False
+
+    for segment in segments:
+        match = re.match(r"^(?:&\s*)?([A-Za-z][\w.-]*|dir|ls|pwd|type)\b", segment)
+        if not match:
+            return False
+        command_name = match.group(1).casefold()
+        if command_name not in PLAN_MODE_ALLOWED_SHELL_COMMANDS:
+            return False
+        if command_name == "git" and not _is_read_only_git_command(segment):
+            return False
+
+    return True
+
+
+def _is_read_only_git_command(command: str) -> bool:
+    parts = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', command)
+    args = [part.strip("\"'") for part in parts[1:]]
+    idx = 0
+    while idx < len(args):
+        raw_arg = args[idx]
+        arg = raw_arg.casefold()
+        if raw_arg == "-C" and idx + 1 < len(args):
+            idx += 2
+            continue
+        if arg.startswith("-"):
+            idx += 1
+            continue
+        return arg in PLAN_MODE_ALLOWED_GIT_SUBCOMMANDS
+    return False
 
 
 def _summarize_arguments(
