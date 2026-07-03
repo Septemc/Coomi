@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from ...tools.registry import ToolRegistry
 from .client import McpError, open_mcp_client
