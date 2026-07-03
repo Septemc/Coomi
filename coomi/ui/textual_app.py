@@ -35,11 +35,24 @@ from ..services.llm.factory import get_config_manager
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
 from ..services.memory.extractor import MemoryExtractor
 from ..services.context.compressor import _estimate_tokens_from_dicts
+from ..services.auto_config import (
+    INTENT_MCP,
+    INTENT_PROVIDER,
+    INTENT_SKILL,
+    InputIntent,
+    InputIntentDetector,
+    McpAutoConfigurator,
+    ProviderAutoConfigurator,
+    SkillAutoInstaller,
+    normalize_mcp_config,
+    normalize_provider_config,
+    redact_secret,
+)
 from ..services.skills import SkillManager
 from ..services.skills.installer import SkillInstallError
 from ..services.mcp import McpManager
 from ..services.mcp.client import McpError
-from ..security import HookSystem, PermissionSystem
+from ..security import HookSystem, PermissionLevel, PermissionSystem
 from ..tools.registry import create_default_registry
 from ..ui.events import (
     AgentCancelled,
@@ -276,6 +289,7 @@ class CoomiApp(App):
         self._tool_start_time: float = 0.0
         self._pending_tool_name: str = ""
         self._pending_tool_args: str = ""
+        self._input_intent_detector = InputIntentDetector()
 
         # Exit state
         self._exit_pending: bool = False
@@ -872,6 +886,201 @@ class CoomiApp(App):
             return "[red]Unknown /mcp command. Use /mcp list|add|enable|disable|remove|test|tools|info[/red]"
         except (McpError, OSError) as exc:
             return f"[red]MCP error:[/red] {exc}"
+
+    async def _handle_auto_config_input(self, text: str) -> str | None:
+        """Handle pasted Provider, Skill, or MCP configuration before agent execution."""
+        intent = self._input_intent_detector.detect(text)
+        if not intent.is_config_intent:
+            return None
+
+        if self._plan_mode:
+            return self._format_auto_config_plan(intent)
+
+        allowed, denial = await self._confirm_auto_config(intent)
+        if not allowed:
+            return denial or "[red]Permission denied: auto configuration was not applied.[/red]"
+
+        try:
+            if intent.kind == INTENT_PROVIDER:
+                if not self._config_mgr:
+                    return "[red]Provider config manager is not initialized[/red]"
+                result = await asyncio.to_thread(
+                    ProviderAutoConfigurator(self._config_mgr).configure,
+                    intent.data["config"],
+                )
+                if result.success:
+                    refreshed = await self._reload_active_provider_from_config()
+                    if not refreshed:
+                        result.message += "\nStatus detail: saved, but runtime refresh failed."
+                return result.message
+
+            if intent.kind == INTENT_SKILL:
+                if not self._skill_manager:
+                    return "[red]Skill manager is not initialized[/red]"
+                result = await asyncio.to_thread(
+                    SkillAutoInstaller(self._skill_manager).install,
+                    intent.data["source"],
+                )
+                if result.success:
+                    await self._rebuild_system_prompt()
+                return result.message
+
+            if intent.kind == INTENT_MCP:
+                if not self._mcp_manager:
+                    return "[red]MCP manager is not initialized[/red]"
+                payload = intent.data.get("command_text") or intent.data.get("config")
+                result = await asyncio.to_thread(
+                    McpAutoConfigurator(self._mcp_manager, self._tool_registry).configure,
+                    payload,
+                )
+                return result.message
+        except Exception as exc:
+            return f"[red]Auto configuration failed:[/red] {type(exc).__name__}: {exc}"
+
+        return None
+
+    def _format_auto_config_plan(self, intent: InputIntent) -> str:
+        lines = [
+            "[bold yellow]Plan Mode is active: auto configuration was not applied.[/bold yellow]",
+            f"Detected: {intent.detected_as or intent.kind}",
+            "Planned action:",
+        ]
+        if intent.kind == INTENT_PROVIDER:
+            try:
+                provider = normalize_provider_config(intent.data["config"])
+                lines.extend(
+                    [
+                        "- Add or update the provider in ~/.coomi/config/providers.json.",
+                        "- Activate this provider and refresh the running LLM runtime.",
+                        f"- Provider: {provider.id}",
+                        f"- Model: {provider.model}",
+                        f"- Tool protocol: {provider.tool_protocol}",
+                        f"- API key: {redact_secret(provider.api_key)}",
+                    ]
+                )
+            except ValueError as exc:
+                lines.append(f"- Provider JSON needs repair before it can be applied: {exc}")
+        elif intent.kind == INTENT_SKILL:
+            lines.extend(
+                [
+                    "- Install the skill into ~/.coomi/skills/.",
+                    "- Repair only the installed copy if metadata or SKILL.md is missing.",
+                    "- Enable the skill and rebuild Coomi's skill context.",
+                    f"- Source: {intent.data.get('source', '')}",
+                ]
+            )
+        elif intent.kind == INTENT_MCP:
+            payload = intent.data.get("command_text") or intent.data.get("config")
+            try:
+                mcp = normalize_mcp_config(payload)
+                lines.extend(
+                    [
+                        "- Add or update the MCP server in ~/.coomi/config/mcp_servers.json.",
+                        "- Enable it, test connectivity, list tools, and register tool adapters.",
+                        f"- Name: {mcp['name']}",
+                        f"- Transport: {mcp['transport']}",
+                    ]
+                )
+                if mcp["transport"] == "stdio":
+                    lines.append(f"- Command: {mcp['command']}")
+                    lines.append(f"- Args: {' '.join(mcp.get('args', []))}")
+                else:
+                    lines.append(f"- URL: {mcp['url']}")
+            except ValueError as exc:
+                lines.append(f"- MCP config needs repair before it can be applied: {exc}")
+        lines.append("Leave Plan Mode with /exit_plan before applying changes.")
+        return "\n".join(lines)
+
+    async def _confirm_auto_config(self, intent: InputIntent) -> tuple[bool, str | None]:
+        arguments = self._auto_config_permission_arguments(intent)
+        level = self._permission_system.check_permission("Config", arguments)
+        if level == PermissionLevel.AUTO:
+            return True, None
+        if level == PermissionLevel.DENY:
+            return False, "[red]Permission denied: auto configuration is blocked by policy.[/red]"
+
+        answers = await self._handle_ask_questions(
+            [
+                {
+                    "header": "Permission",
+                    "question": self._auto_config_permission_question(intent, arguments),
+                    "options": [
+                        {
+                            "label": "Allow",
+                            "value": "allow",
+                            "description": (
+                                "Coomi will perform the listed write or external actions now. "
+                                "Provider secrets are redacted in the prompt, and Skill repairs "
+                                "only touch the installed copy or temporary clone."
+                            ),
+                            "is_recommended": True,
+                        },
+                        {
+                            "label": "Deny",
+                            "value": "deny",
+                            "description": (
+                                "Coomi will leave providers.json, skills.json, MCP settings, "
+                                "installed skills, and tool registration unchanged."
+                            ),
+                        },
+                    ],
+                }
+            ]
+        )
+        if answers.get("__cancelled__"):
+            return False, "[red]Permission request cancelled: auto configuration was not applied.[/red]"
+        if answers.get(0, {}).get("option") == "allow":
+            return True, None
+        return False, "[red]Permission denied: auto configuration was not applied.[/red]"
+
+    def _auto_config_permission_question(self, intent: InputIntent, arguments: dict[str, Any]) -> str:
+        lines = [
+            f"Allow Coomi to apply detected {intent.detected_as or intent.kind}?",
+            f"Action: {arguments.get('action', 'configure')}",
+        ]
+        for key in ("provider", "model", "api_key", "source", "name", "transport", "url", "command", "args"):
+            value = arguments.get(key)
+            if value not in (None, "", []):
+                rendered = " ".join(value) if isinstance(value, list) else str(value)
+                lines.append(f"{key}: {rendered}")
+        return "\n".join(lines)
+
+    def _auto_config_permission_arguments(self, intent: InputIntent) -> dict[str, Any]:
+        if intent.kind == INTENT_PROVIDER:
+            try:
+                provider = normalize_provider_config(intent.data["config"])
+                return {
+                    "action": "write Provider config and activate LLM",
+                    "provider": provider.id,
+                    "model": provider.model,
+                    "tool_protocol": provider.tool_protocol,
+                    "api_key": redact_secret(provider.api_key),
+                }
+            except ValueError:
+                return {"action": "attempt Provider config validation", "kind": intent.kind}
+
+        if intent.kind == INTENT_SKILL:
+            return {
+                "action": "install, repair, and enable Skill",
+                "source": intent.data.get("source", ""),
+            }
+
+        if intent.kind == INTENT_MCP:
+            payload = intent.data.get("command_text") or intent.data.get("config")
+            try:
+                mcp = normalize_mcp_config(payload)
+                return {
+                    "action": "write, enable, test, and register MCP tools",
+                    "name": mcp["name"],
+                    "transport": mcp["transport"],
+                    "url": mcp.get("url", ""),
+                    "command": mcp.get("command", ""),
+                    "args": mcp.get("args", []),
+                }
+            except ValueError:
+                return {"action": "attempt MCP config validation", "kind": intent.kind}
+
+        return {"action": "auto configure", "kind": intent.kind}
 
     async def _handle_plan_command(self) -> None:
         self._plan_mode = True
@@ -1556,6 +1765,12 @@ class CoomiApp(App):
             self._refresh_status_panel()
             return
 
+        auto_config_result = await self._handle_auto_config_input(user_input)
+        if auto_config_result is not None:
+            self._show_command_result(auto_config_result)
+            self._refresh_status_panel()
+            return
+
         # --- agent execution ---
         self._ensure_new_session_for_welcome_input()
         asyncio.create_task(self._run_agent_async(user_input))
@@ -1647,9 +1862,18 @@ class CoomiApp(App):
             self._refresh_status_panel()
             return
 
+        import asyncio
+        asyncio.create_task(self._show_auto_config_or_run_agent(text))
+
+    async def _show_auto_config_or_run_agent(self, text: str) -> None:
+        auto_config_result = await self._handle_auto_config_input(text)
+        if auto_config_result is not None:
+            self._show_command_result(auto_config_result)
+            self._refresh_status_panel()
+            return
+
         # --- agent execution ---
         self._ensure_new_session_for_welcome_input()
-        import asyncio
         asyncio.create_task(self._run_agent_async(text))
 
     async def _run_agent_async(self, user_input: str) -> None:

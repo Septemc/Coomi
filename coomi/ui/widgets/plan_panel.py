@@ -191,9 +191,30 @@ class PlanPanel(Widget):
 
 def _option_summary(option: dict) -> str:
     summary = option.get("summary") or option.get("preview") or ""
+    if not summary:
+        summary = _summary_from_description(option.get("description") or "")
     return " ".join(str(summary).split())
 
 
 def _option_description(option: dict) -> str:
     description = option.get("description") or ""
     return " ".join(str(description).split())
+
+
+def _summary_from_description(description: object) -> str:
+    text = " ".join(str(description or "").split())
+    if not text:
+        return ""
+    separators = ("\u3002", "\uff0c", "\uff1b", ".", ";", ",")
+    for separator in separators:
+        if separator not in text:
+            continue
+        head = text.split(separator, 1)[0].strip()
+        if head:
+            return head[:48]
+    return text[:48]
+    for separator in ("。", "，", "；", ".", ";", ","):
+        head = text.split(separator, 1)[0].strip()
+        if head:
+            return head[:48]
+    return text[:48]

@@ -10,6 +10,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from ... import __version__
 from .models import McpServerConfig, McpToolSpec
 
 
@@ -81,7 +82,7 @@ class StdioMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
+                "clientInfo": {"name": "coomi-agent", "version": __version__},
             },
         )
         if not isinstance(result, dict):
@@ -201,7 +202,7 @@ class HttpMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
+                "clientInfo": {"name": "coomi-agent", "version": __version__},
             },
         )
 
@@ -287,7 +288,7 @@ class SseMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
+                "clientInfo": {"name": "coomi-agent", "version": __version__},
             },
         )
 

@@ -16,6 +16,7 @@ from coomi.ui.widgets.custom_header import CustomHeader
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
+from coomi.ui.widgets.welcome_panel import WelcomePanel
 
 
 class SelectionTestApp(App):
@@ -264,12 +265,61 @@ def test_plan_panel_renders_option_summary_before_detailed_description():
     assert "Use the existing code path and only adjust the narrow behavior." in rendered
 
 
+def test_plan_panel_derives_summary_for_terse_question_options():
+    panel = PlanPanel(
+        [
+            {
+                "header": "Mode",
+                "question": "Which path should Coomi use?",
+                "options": [
+                    {
+                        "label": "Auto",
+                        "description": (
+                            "Automatically repair the installed copy. This keeps the source untouched "
+                            "while making the skill usable immediately."
+                        ),
+                    },
+                    {
+                        "label": "Manual",
+                        "description": (
+                            "Stop and ask for edits. This gives the user full control before Coomi changes anything."
+                        ),
+                    },
+                ],
+            }
+        ]
+    )
+    console = Console(record=True, width=100)
+
+    console.print(panel.render())
+    rendered = console.export_text()
+
+    assert "Auto - Automatically repair the installed copy" in rendered
+    assert "This keeps the source untouched" in rendered
+    assert "skill usable immediately." in rendered
+
+
+def test_welcome_panel_mentions_direct_paste_auto_configuration():
+    panel = WelcomePanel()
+    panel.set_context("demo-model", 12)
+    console = Console(record=True, width=120)
+
+    console.print(panel._render_bubble(60))
+    rendered = console.export_text()
+
+    assert "Provider JSON" in rendered
+    assert "Skill URL/path" in rendered
+    assert "MCP JSON/URL/stdio" in rendered
+
+
 def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
     screen = SettingsScreen()
 
     llm_guide = screen._render_guide()
     assert "providers.json" in llm_guide
     assert "tool_protocol" in llm_guide
+    assert "Provider JSON" in llm_guide
+    assert "input box" in llm_guide
     assert "保存后配置会自动生效" in llm_guide
 
     screen._selected = 1
@@ -277,9 +327,11 @@ def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
     assert "/skill install" in skill_guide
     assert "SKILL.md" in skill_guide
     assert "GitHub" in skill_guide
+    assert "Skill URL/path" in skill_guide
 
     screen._selected = 2
     mcp_guide = screen._render_guide()
     assert "/mcp add" in mcp_guide
     assert "stdio" in mcp_guide
     assert "mcp__server__tool" in mcp_guide
+    assert "MCP JSON/URL/stdio" in mcp_guide

@@ -100,7 +100,14 @@ class SettingsScreen(ModalScreen[Optional[str]]):
             "MCP: ~/.coomi/config/mcp_servers.json\n\n"
             "[dim]提示：Plan Mode 下只能查看或规划，安装 Skill、添加 MCP、修改 Provider 需要退出 Plan Mode 后执行。[/dim]"
         )
-        return selected_guide + quick_reference
+        direct_paste = (
+            "\n\n[bold]Direct paste shortcuts[/bold]\n"
+            "Provider JSON: paste a Provider JSON object into the input box to add, activate, and refresh the LLM runtime.\n"
+            "Skill URL/path: paste a GitHub Skill URL or local Skill path into the input box to install, repair, enable, and refresh Skill context.\n"
+            "MCP JSON/URL/stdio: paste MCP JSON, an MCP URL, or an MCP stdio command into the input box to configure, test, and register tools.\n"
+            "Plan Mode: direct paste only returns an execution plan and never writes files, installs Skills, or enables MCP servers.\n"
+        )
+        return selected_guide + quick_reference + direct_paste
 
     def action_move_up(self) -> None:
         self._selected = (self._selected - 1) % len(SETTINGS_OPTIONS)

@@ -111,10 +111,12 @@ Do NOT use AskUserQuestion for:
 When using AskUserQuestion, provide:
 - 1-4 questions maximum, each with a short header (≤4 chars)
 - 2-4 options per question
-- For every option, use this structure:
+- For every option, always provide all three fields:
   - label: a short option name
-  - summary: one concise opening phrase that states the main impact
+  - summary: one concise opening phrase shown immediately after the label; it must state the main impact
   - description: one concrete paragraph explaining implications, tradeoffs, and when to choose it
+- Do not put only a terse description in options. The user should see a compact summary first,
+  followed by a useful explanatory paragraph.
 - A recommendation for each question when you have a strong preference
 
 ## Git Safety Protocol

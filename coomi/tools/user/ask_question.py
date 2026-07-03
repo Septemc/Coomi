@@ -29,8 +29,10 @@ class AskUserQuestionTool(BaseTool):
         "Usage guidelines:\n"
         "- Provide 1-4 questions, each with a short header (<=4 chars for the nav bar)\n"
         "- Provide 2-4 options per question\n"
-        "- Each option must include a short label, a concise summary, and a detailed paragraph\n"
-        "- Keep option labels brief; put the immediate impact in summary and tradeoffs in description\n"
+        "- Each option must include label, summary, and description; do not omit summary\n"
+        "- Start each option with summary: a concise opening phrase that states the immediate impact\n"
+        "- Follow with description: a concrete paragraph explaining consequences, tradeoffs, and when to choose it\n"
+        "- Keep option labels brief; never put the whole explanation in the label\n"
         "- Set a recommendation on questions where you have a strong preference\n"
         "- Do NOT use for trivial decisions you can make yourself"
     )
@@ -66,15 +68,16 @@ class AskUserQuestionTool(BaseTool):
                                         "summary": {
                                             "type": "string",
                                             "description": (
-                                                "Concise opening description shown beside the label. "
-                                                "State the option's main effect in one short phrase."
+                                                "Required Concise opening description shown beside the label. "
+                                                "State the option's main effect in one short phrase before the detailed paragraph."
                                             ),
                                         },
                                         "description": {
                                             "type": "string",
                                             "description": (
-                                                "Detailed paragraph explaining what this option means, "
-                                                "including implications, tradeoffs, and when to choose it."
+                                                "Required Detailed paragraph explaining what this option means, "
+                                                "including implications, tradeoffs, and when to choose it. "
+                                                "Do not use a terse fragment; give enough context for an informed choice."
                                             ),
                                         },
                                         "preview": {
