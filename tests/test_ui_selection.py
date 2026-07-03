@@ -9,6 +9,7 @@ from textual.strip import Strip
 from textual.widgets.text_area import Selection
 
 from coomi.ui.screens.main_screen import MainScreen
+from coomi.ui.screens.settings_screen import SettingsScreen
 from coomi.ui.status_line import StatusLine
 from coomi.ui.textual_app import CoomiApp
 from coomi.ui.widgets.custom_header import CustomHeader
@@ -261,3 +262,24 @@ def test_plan_panel_renders_option_summary_before_detailed_description():
 
     assert "Conservative - Smallest change" in rendered
     assert "Use the existing code path and only adjust the narrow behavior." in rendered
+
+
+def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():
+    screen = SettingsScreen()
+
+    llm_guide = screen._render_guide()
+    assert "providers.json" in llm_guide
+    assert "tool_protocol" in llm_guide
+    assert "保存后配置会自动生效" in llm_guide
+
+    screen._selected = 1
+    skill_guide = screen._render_guide()
+    assert "/skill install" in skill_guide
+    assert "SKILL.md" in skill_guide
+    assert "GitHub" in skill_guide
+
+    screen._selected = 2
+    mcp_guide = screen._render_guide()
+    assert "/mcp add" in mcp_guide
+    assert "stdio" in mcp_guide
+    assert "mcp__server__tool" in mcp_guide

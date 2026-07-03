@@ -81,7 +81,7 @@ class StdioMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.7"},
+                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
             },
         )
         if not isinstance(result, dict):
@@ -201,7 +201,7 @@ class HttpMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.7"},
+                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
             },
         )
 
@@ -287,7 +287,7 @@ class SseMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "coomi-agent", "version": "0.1.7"},
+                "clientInfo": {"name": "coomi-agent", "version": "0.1.8"},
             },
         )
 
