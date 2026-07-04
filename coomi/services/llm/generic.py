@@ -82,18 +82,52 @@ class GenericOpenAIProvider(LLMProvider):
             return fallback
         return None
 
-    async def _create_completion_with_fallback(self, params: dict[str, Any]):
+    async def _create_completion_with_fallback(
+        self,
+        params: dict[str, Any],
+    ) -> tuple[Any, dict[str, Any]]:
         current = params
         seen: set[str] = set()
         while True:
             try:
-                return await self.client.chat.completions.create(**current)
+                response = await self.client.chat.completions.create(**current)
+                return response, current
             except BadRequestError:
                 key = json.dumps(sorted(current.keys()))
                 if key in seen:
                     raise
                 seen.add(key)
                 fallback = self._fallback_params(current)
+                if fallback is None:
+                    raise
+                current = fallback
+
+    async def _stream_completion_chunks_with_fallback(
+        self,
+        params: dict[str, Any],
+    ) -> AsyncIterator[Any]:
+        current = params
+        seen: set[str] = set()
+        while True:
+            response, used_params = await self._create_completion_with_fallback(current)
+            yielded_chunk = False
+            try:
+                async for chunk in response:
+                    yielded_chunk = True
+                    yield chunk
+                return
+            except BadRequestError as exc:
+                if yielded_chunk:
+                    raise RuntimeError(
+                        "Streaming BadRequestError after a partial response; "
+                        "not retrying fallback to avoid duplicate output."
+                    ) from exc
+
+                key = json.dumps(sorted(used_params.keys()))
+                if key in seen:
+                    raise
+                seen.add(key)
+                fallback = self._fallback_params(used_params)
                 if fallback is None:
                     raise
                 current = fallback
@@ -160,7 +194,7 @@ class GenericOpenAIProvider(LLMProvider):
         **kwargs,
     ) -> LLMResponse:
         params = self._build_params(messages, tools, stream=False)
-        response = await self._create_completion_with_fallback(params)
+        response, _ = await self._create_completion_with_fallback(params)
         return self._parse_response(response, tools_enabled=bool(tools))
 
     async def chat_stream(
@@ -169,9 +203,8 @@ class GenericOpenAIProvider(LLMProvider):
         **kwargs,
     ) -> AsyncIterator[str]:
         params = self._build_params(messages, stream=True)
-        response = await self._create_completion_with_fallback(params)
         thinking_filter = ThinkingTagFilter()
-        async for chunk in response:
+        async for chunk in self._stream_completion_chunks_with_fallback(params):
             if chunk.choices[0].delta.content:
                 reasoning, content = thinking_filter.feed(chunk.choices[0].delta.content)
                 if reasoning:
@@ -188,14 +221,12 @@ class GenericOpenAIProvider(LLMProvider):
     ) -> AsyncIterator[dict[str, Any]]:
         params = self._build_params(messages, tools, stream=True)
 
-        response = await self._create_completion_with_fallback(params)
-
         tool_calls_accum: dict[int, dict[str, Any]] = {}
         tool_names_seen: set[int] = set()
         usage_yielded = False
         thinking_filter = ThinkingTagFilter()
 
-        async for chunk in response:
+        async for chunk in self._stream_completion_chunks_with_fallback(params):
             if chunk.usage:
                 usage_yielded = True
                 yield {

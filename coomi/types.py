@@ -38,6 +38,15 @@ class Message:
             msg["content"] = self.content
 
         if self.tool_calls:
+            native_tool_calls = [
+                tc
+                for tc in self.tool_calls
+                if tc.source != "text_fallback" and not tc.id.startswith("text_call_")
+            ]
+        else:
+            native_tool_calls = []
+
+        if native_tool_calls:
             msg["tool_calls"] = [
                 {
                     "id": tc.id,
@@ -47,7 +56,7 @@ class Message:
                         "arguments": json.dumps(tc.arguments),
                     },
                 }
-                for tc in self.tool_calls
+                for tc in native_tool_calls
             ]
 
         if self.tool_call_id:

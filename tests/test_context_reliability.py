@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from coomi.engine.loop import (
     AgentLoop,
@@ -17,7 +20,11 @@ from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
 from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
 from coomi.services.llm.config import ProviderConfig
-from coomi.services.llm.generic import ThinkingTagFilter, _strip_thinking_tags
+from coomi.services.llm.generic import (
+    GenericOpenAIProvider,
+    ThinkingTagFilter,
+    _strip_thinking_tags,
+)
 from coomi.services.llm.provider import LLMProvider
 from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
@@ -61,6 +68,37 @@ class CountingTool(BaseTool):
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         self.calls += 1
+        return ToolResult(success=True, output=self.output)
+
+
+class TypedArgumentTool(CountingTool):
+    name = "Typed"
+
+    def __init__(self, output: str = "ok"):
+        super().__init__(output=output)
+        self.last_arguments: dict[str, Any] | None = None
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "limit": {"type": "integer"},
+                "ratio": {"type": "number"},
+                "enabled": {"type": "boolean"},
+                "metadata": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                },
+                "items": {"type": "array", "items": {"type": "integer"}},
+                "string_code": {"type": "string"},
+            },
+            "required": ["file_path"],
+        }
+
+    def run(self, arguments: dict[str, Any]) -> ToolResult:
+        self.calls += 1
+        self.last_arguments = dict(arguments)
         return ToolResult(success=True, output=self.output)
 
 
@@ -459,6 +497,97 @@ class DisabledTextToolCodeProvider(MimoToolCodeProvider):
         return "disabled"
 
 
+def _bad_request_error() -> BadRequestError:
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    return BadRequestError(
+        "bad request",
+        response=response,
+        body={"error": {"message": "bad request"}},
+    )
+
+
+def _stream_chunk(content: str):
+    return SimpleNamespace(
+        usage=None,
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(
+                    content=content,
+                    reasoning_content=None,
+                    tool_calls=None,
+                )
+            )
+        ],
+    )
+
+
+class ListStream:
+    def __init__(self, chunks: list[Any]):
+        self._chunks = list(chunks)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+
+class BadRequestBeforeFirstChunkStream:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise _bad_request_error()
+
+
+class BadRequestAfterContentStream:
+    def __init__(self):
+        self._sent = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._sent:
+            self._sent = True
+            return _stream_chunk("partial")
+        raise _bad_request_error()
+
+
+class FakeCompletions:
+    def __init__(self, responses: list[Any]):
+        self.responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **params):
+        self.calls.append(params)
+        if not self.responses:
+            raise AssertionError("No fake completion response configured")
+        return self.responses.pop(0)
+
+
+def _generic_provider_with_responses(
+    responses: list[Any],
+) -> tuple[GenericOpenAIProvider, FakeCompletions]:
+    provider = GenericOpenAIProvider(
+        ProviderConfig(
+            id="generic",
+            type="generic",
+            display="Generic",
+            api_key="sk-test",
+            model="model",
+        )
+    )
+    completions = FakeCompletions(responses)
+    provider.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+    return provider, completions
+
+
 def test_message_guard_repairs_tool_pairing_and_strips_reasoning():
     session = Session(id="s", system_prompt="sys")
     session.messages = [
@@ -486,6 +615,140 @@ def test_message_guard_repairs_tool_pairing_and_strips_reasoning():
     assert len(tool_results) == 1
     assert tool_results[0]["tool_call_id"] == "call_1"
     assert tool_results[0]["content"] == SYNTHETIC_TOOL_RESULT
+
+
+def test_message_guard_text_fallback_history_becomes_plain_text():
+    session = Session(id="s", system_prompt="sys")
+    session.messages = [
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="text_call_1",
+                    name="Read",
+                    arguments={"file_path": "a.txt", "limit": "50"},
+                    source="text_fallback",
+                )
+            ],
+        ),
+        Message(role="tool", content="file contents", tool_call_id="text_call_1"),
+    ]
+
+    payload = session.get_messages_for_api()
+    transcript = "\n".join(str(msg.get("content") or "") for msg in payload)
+
+    assert not any(msg.get("tool_calls") for msg in payload)
+    assert not any(msg["role"] == "tool" for msg in payload)
+    assert "Read" in transcript
+    assert "file_path" in transcript
+    assert "limit" in transcript
+    assert "50" in transcript
+    assert "file contents" in transcript
+
+
+def test_message_guard_preserves_native_tool_call_messages():
+    session = Session(id="s", system_prompt="sys")
+    session.messages = [
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_native",
+                    name="Read",
+                    arguments={"file_path": "a.txt"},
+                )
+            ],
+        ),
+        Message(role="tool", content="native result", tool_call_id="call_native"),
+    ]
+
+    payload = session.get_messages_for_api()
+
+    assistant_tool_calls = [msg for msg in payload if msg.get("tool_calls")]
+    assert len(assistant_tool_calls) == 1
+    assert assistant_tool_calls[0]["tool_calls"][0]["id"] == "call_native"
+    assert any(
+        msg["role"] == "tool"
+        and msg["tool_call_id"] == "call_native"
+        and msg["content"] == "native result"
+        for msg in payload
+    )
+
+
+def test_message_guard_legacy_text_call_id_is_textified():
+    session = Session(id="s", system_prompt="sys")
+    session.messages = [
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="text_call_legacy",
+                    name="Read",
+                    arguments={"file_path": "legacy.txt"},
+                )
+            ],
+        ),
+        Message(role="tool", content="legacy result", tool_call_id="text_call_legacy"),
+    ]
+
+    payload = session.get_messages_for_api()
+    transcript = "\n".join(str(msg.get("content") or "") for msg in payload)
+
+    assert not any(msg.get("tool_calls") for msg in payload)
+    assert not any(msg["role"] == "tool" for msg in payload)
+    assert "Read" in transcript
+    assert "legacy.txt" in transcript
+    assert "legacy result" in transcript
+
+
+def test_message_guard_mixed_native_and_text_fallback_is_provider_safe():
+    session = Session(id="s", system_prompt="sys")
+    session.messages = [
+        Message(
+            role="assistant",
+            content="Need two tools",
+            tool_calls=[
+                ToolCall(
+                    id="call_native",
+                    name="Glob",
+                    arguments={"pattern": "*.py"},
+                ),
+                ToolCall(
+                    id="text_call_2",
+                    name="Read",
+                    arguments={"file_path": "a.txt"},
+                    source="text_fallback",
+                ),
+            ],
+        ),
+        Message(role="tool", content="glob result", tool_call_id="call_native"),
+        Message(role="tool", content="read result", tool_call_id="text_call_2"),
+    ]
+
+    payload = session.get_messages_for_api()
+    transcript = "\n".join(str(msg.get("content") or "") for msg in payload)
+
+    native_tool_results = [
+        msg
+        for msg in payload
+        if msg["role"] == "tool" and msg["tool_call_id"] == "call_native"
+    ]
+    assert len(native_tool_results) == 1
+    assert not any(
+        msg["role"] == "tool" and msg.get("tool_call_id") == "text_call_2"
+        for msg in payload
+    )
+    assert any(
+        msg.get("tool_calls")
+        and msg["tool_calls"][0]["id"] == "call_native"
+        for msg in payload
+    )
+    assert "Read" in transcript
+    assert "a.txt" in transcript
+    assert "read result" in transcript
 
 
 def test_compressor_trim_keeps_tool_call_group_together():
@@ -1848,6 +2111,76 @@ async def test_tool_executor_does_not_force_ask_for_text_fallback_read_only_tool
     assert tool.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_tool_executor_coerces_text_fallback_arguments_by_schema(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = TypedArgumentTool(output="typed ok")
+    registry.register(tool)
+    executor = ToolExecutor(
+        registry,
+        permission_system=full_access_permissions(),
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="text_call_typed",
+            name="Typed",
+            arguments={
+                "file_path": "x",
+                "limit": "50",
+                "ratio": "3.14",
+                "enabled": "true",
+                "metadata": '{"count": "7"}',
+                "items": '["1", "2"]',
+                "string_code": "50",
+            },
+            source="text_fallback",
+        ),
+    )
+
+    assert not outcome.is_error
+    assert outcome.result_text == "typed ok"
+    assert tool.last_arguments == {
+        "file_path": "x",
+        "limit": 50,
+        "ratio": 3.14,
+        "enabled": True,
+        "metadata": {"count": 7},
+        "items": [1, 2],
+        "string_code": "50",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_keeps_invalid_integer_string_for_validation(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = TypedArgumentTool()
+    registry.register(tool)
+    executor = ToolExecutor(
+        registry,
+        permission_system=full_access_permissions(),
+        project_path=str(tmp_path),
+    )
+    session = Session(id="s")
+
+    outcome = await executor.execute(
+        session,
+        ToolCall(
+            id="text_call_bad_int",
+            name="Typed",
+            arguments={"file_path": "x", "limit": "fifty"},
+            source="text_fallback",
+        ),
+    )
+
+    assert outcome.is_error
+    assert "Parameter 'limit' must be integer, got str" in outcome.result_text
+    assert tool.calls == 0
+
+
 def test_tool_formatter_displays_agent_canonical_name():
     assert format_tool_display("Agent", {"description": "Inspect aliases"}) == "Agent: Inspect aliases"
 
@@ -1887,3 +2220,55 @@ def test_thinking_tags_are_removed_from_visible_generic_content():
     assert content_1 == ""
     assert reasoning_2 == "hidden"
     assert content_2 == "visible"
+
+
+@pytest.mark.asyncio
+async def test_generic_stream_bad_request_before_first_chunk_uses_fallback():
+    provider, completions = _generic_provider_with_responses(
+        [
+            BadRequestBeforeFirstChunkStream(),
+            ListStream([_stream_chunk("ok")]),
+        ]
+    )
+
+    events = [
+        event
+        async for event in provider.chat_stream_with_tools(
+            [{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "description": "read",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+    ]
+
+    assert [event for event in events if event["type"] == "content"] == [
+        {"type": "content", "content": "ok"}
+    ]
+    assert len(completions.calls) == 2
+    assert "stream_options" in completions.calls[0]
+    assert "stream_options" not in completions.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_generic_stream_bad_request_after_yield_does_not_retry():
+    provider, completions = _generic_provider_with_responses(
+        [BadRequestAfterContentStream()]
+    )
+    events: list[dict[str, Any]] = []
+
+    with pytest.raises(RuntimeError, match="after a partial response"):
+        async for event in provider.chat_stream_with_tools(
+            [{"role": "user", "content": "hi"}],
+            tools=None,
+        ):
+            events.append(event)
+
+    assert events == [{"type": "content", "content": "partial"}]
+    assert len(completions.calls) == 1

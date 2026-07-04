@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import os
 import re
 import time
@@ -152,7 +154,21 @@ class ToolExecutor:
                 persist=False,
             )
 
-        validation_error = self._validate_arguments(tool, tool_call.arguments)
+        validation_error: str | None
+        try:
+            schema = tool.get_parameters_schema()
+        except Exception as exc:
+            validation_error = f"Could not load schema: {exc}"
+        else:
+            if _should_coerce_arguments(tool_call):
+                coerced_arguments = _coerce_arguments_for_schema(tool_call.arguments, schema)
+                if coerced_arguments != tool_call.arguments:
+                    tool_call = replace(tool_call, arguments=coerced_arguments)
+            validation_error = self._validate_arguments(
+                tool,
+                tool_call.arguments,
+                schema=schema,
+            )
         if validation_error:
             return self._outcome(
                 session,
@@ -275,12 +291,17 @@ class ToolExecutor:
             return True, None
         return False, f"Permission denied for tool '{tool.name}'"
 
-    def _validate_arguments(self, tool: BaseTool, arguments: dict[str, Any]) -> str | None:
-        try:
-            schema = tool.get_parameters_schema()
-        except Exception as exc:
-            return f"Could not load schema: {exc}"
-
+    def _validate_arguments(
+        self,
+        tool: BaseTool,
+        arguments: dict[str, Any],
+        schema: dict[str, Any] | None = None,
+    ) -> str | None:
+        if schema is None:
+            try:
+                schema = tool.get_parameters_schema()
+            except Exception as exc:
+                return f"Could not load schema: {exc}"
         required = schema.get("required", [])
         for key in required:
             if key not in arguments:
@@ -383,6 +404,131 @@ def _matches_json_type(value: Any, expected_type: str | list[str]) -> bool:
     return True
 
 
+def _should_coerce_arguments(tool_call: ToolCall) -> bool:
+    return tool_call.source == "text_fallback" or tool_call.id.startswith("text_call_")
+
+
+def _coerce_arguments_for_schema(
+    arguments: dict[str, Any],
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return arguments
+
+    coerced: dict[str, Any] = {}
+    changed = False
+    for key, value in arguments.items():
+        prop = properties.get(key)
+        next_value = _coerce_value_for_schema(value, prop if isinstance(prop, dict) else None)
+        coerced[key] = next_value
+        if next_value != value or type(next_value) is not type(value):
+            changed = True
+    return coerced if changed else arguments
+
+
+def _coerce_value_for_schema(value: Any, schema: dict[str, Any] | None) -> Any:
+    if not schema:
+        return value
+
+    expected_types = _schema_types(schema)
+    if "string" in expected_types:
+        return value
+
+    if isinstance(value, dict):
+        if "object" in expected_types:
+            return _coerce_object_for_schema(value, schema)
+        return value
+
+    if isinstance(value, list):
+        if "array" in expected_types:
+            return _coerce_array_for_schema(value, schema)
+        return value
+
+    if not isinstance(value, str):
+        return value
+
+    if "integer" in expected_types:
+        stripped = value.strip()
+        if re.fullmatch(r"[+-]?\d+", stripped):
+            try:
+                return int(stripped)
+            except ValueError:
+                return value
+        return value
+
+    if "number" in expected_types:
+        stripped = value.strip()
+        try:
+            number = float(stripped)
+        except ValueError:
+            return value
+        return number if math.isfinite(number) else value
+
+    if "boolean" in expected_types:
+        lowered = value.strip().casefold()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        return value
+
+    if "object" in expected_types:
+        parsed = _parse_json_string(value)
+        if isinstance(parsed, dict):
+            return _coerce_object_for_schema(parsed, schema)
+        return value
+
+    if "array" in expected_types:
+        parsed = _parse_json_string(value)
+        if isinstance(parsed, list):
+            return _coerce_array_for_schema(parsed, schema)
+        return value
+
+    return value
+
+
+def _coerce_object_for_schema(value: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return value
+    coerced: dict[str, Any] = {}
+    changed = False
+    for key, item in value.items():
+        prop = properties.get(key)
+        next_item = _coerce_value_for_schema(item, prop if isinstance(prop, dict) else None)
+        coerced[key] = next_item
+        if next_item != item or type(next_item) is not type(item):
+            changed = True
+    return coerced if changed else value
+
+
+def _coerce_array_for_schema(value: list[Any], schema: dict[str, Any]) -> list[Any]:
+    items_schema = schema.get("items")
+    if not isinstance(items_schema, dict):
+        return value
+    coerced = [_coerce_value_for_schema(item, items_schema) for item in value]
+    if any(next_item != item or type(next_item) is not type(item) for item, next_item in zip(value, coerced)):
+        return coerced
+    return value
+
+
+def _schema_types(schema: dict[str, Any]) -> set[str]:
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        return {raw_type}
+    if isinstance(raw_type, list):
+        return {item for item in raw_type if isinstance(item, str)}
+    return set()
+
+
+def _parse_json_string(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
 def _is_read_only_shell_command(command: str) -> bool:
     normalized = " ".join((command or "").strip().split())
     if not normalized:
@@ -444,7 +590,7 @@ def _argument_summary_lines(arguments: dict[str, Any], tool_name: str) -> list[s
     if tool_name == "AskUserQuestion":
         questions = arguments.get("questions")
         if isinstance(questions, list):
-            lines = [f"Questions: {len(questions)}"]
+            question_lines = [f"Questions: {len(questions)}"]
             for index, question in enumerate(questions[:4], start=1):
                 if not isinstance(question, dict):
                     continue
@@ -452,8 +598,8 @@ def _argument_summary_lines(arguments: dict[str, Any], tool_name: str) -> list[s
                 options = question.get("options")
                 option_count = len(options) if isinstance(options, list) else 0
                 multi = " multi-select" if question.get("multiSelect") else ""
-                lines.append(f"Q{index}: {text} ({option_count} options{multi})")
-            return lines
+                question_lines.append(f"Q{index}: {text} ({option_count} options{multi})")
+            return question_lines
 
     preferred_keys = (
         "file_path",
