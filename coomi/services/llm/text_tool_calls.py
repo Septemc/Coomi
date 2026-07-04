@@ -58,7 +58,7 @@ Agent/Task: description, prompt
 AskUserQuestion: questions
 """
 
-_TOOL_BLOCK_TAGS = ("tool_call", "tool_code")
+_TOOL_BLOCK_TAGS = ("tool_call", "tool_calls", "tool_code")
 _DIRECT_TOOL_TAGS = (
     "read",
     "read_file",
@@ -90,7 +90,8 @@ _DIRECT_TOOL_TAGS = (
     "exitplanmode",
 )
 _SINGLE_TOOL_TAGS = _DIRECT_TOOL_TAGS
-_MIMO_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
+_STRUCTURED_TOOL_START_TAGS = (*_TOOL_BLOCK_TAGS, *_SINGLE_TOOL_TAGS)
+_MIMO_TOOL_START_TAGS = _STRUCTURED_TOOL_START_TAGS
 _KNOWN_TOOL_NAME_ALIASES = {
     "read",
     "readfile",
@@ -129,6 +130,15 @@ _KNOWN_TOOL_NAME_ALIASES = {
     "enterplanmode",
     "exitplanmode",
 }
+_KNOWN_INTEGER_ARGUMENTS = {
+    ("read", "limit"),
+    ("read", "offset"),
+    ("readfile", "limit"),
+    ("readfile", "offset"),
+    ("openfile", "limit"),
+    ("openfile", "offset"),
+}
+_KNOWN_NUMBER_ARGUMENTS: set[tuple[str, str]] = set()
 _STRUCTURE_HINT_PATTERN = re.compile(
     r"tool_calls?|tool_code|function_call|function\s*=|invoke\b|parameter\b|"
     r"arguments\b|input\b|name\s*=|tool\s*=|<\s*\|\s*\|\s*dsml\s*\|\s*\|",
@@ -222,6 +232,13 @@ class TextToolCallFilter:
                 if keep:
                     visible_parts.append(text[:-keep])
                     self._pending = text[-keep:]
+                elif is_likely_text_tool_call(text, mode=self.mode):
+                    tool_calls.append(
+                        _build_malformed_text_tool_call(
+                            text,
+                            reason="The text looked like a tool call but did not match a supported complete format.",
+                        )
+                    )
                 else:
                     visible_parts.append(text)
                 text = ""
@@ -245,6 +262,14 @@ class TextToolCallFilter:
         visible = self._pending
         self._pending = ""
         tool_calls: list[dict[str, Any]] = []
+        if visible and is_likely_text_tool_call(visible, mode=self.mode):
+            tool_calls.append(
+                _build_malformed_text_tool_call(
+                    visible,
+                    reason="The text looked like a tool call but did not match a supported complete format.",
+                )
+            )
+            visible = ""
 
         if self._in_tool_call and self._tool_buffer:
             parsed_tool_calls = parse_text_tool_calls(self._tool_buffer, mode=self.mode)
@@ -303,6 +328,9 @@ def parse_text_tool_calls(
     if _contains_dsml_tool_call(raw):
         calls = _parse_dsml_tool_calls(raw)
         return calls or [_build_malformed_text_tool_call(raw)]
+    if _opening_tag_name(raw) == "tool_calls":
+        calls = _parse_xml_tool_calls_container(raw, mode=mode)
+        return calls or [_build_malformed_text_tool_call(raw)]
     tool_call = parse_text_tool_call(raw, mode=mode)
     return [tool_call] if tool_call else []
 
@@ -333,6 +361,10 @@ def is_likely_text_tool_call(
         return True
     if re.search(r"<\s*(function|parameter)\s*=", stripped, re.IGNORECASE):
         return True
+    if _contains_xml_tool_container(stripped):
+        return True
+    if _contains_direct_xml_tool_tag(stripped):
+        return True
     if _looks_like_json_tool_call(stripped, allow_partial=True):
         return True
     if _looks_like_function_tool_call(stripped, allow_partial=True):
@@ -361,12 +393,13 @@ def parse_text_tool_call(
         return calls[0] if calls else _build_malformed_text_tool_call(raw)
 
     tag = _opening_tag_name(raw)
+    if tag == "tool_calls":
+        calls = _parse_xml_tool_calls_container(raw, mode=mode)
+        return calls[0] if calls else _build_malformed_text_tool_call(raw)
     if tag == "tool_code":
         return _parse_tool_code_call(raw)
-    if tag in _SINGLE_TOOL_TAGS and mode == TEXT_TOOL_MODE_MIMO:
-        return _parse_direct_tag_tool_call(raw, tag)
     if tag in _SINGLE_TOOL_TAGS:
-        return None
+        return _parse_direct_tag_tool_call(raw, tag)
 
     json_call = _parse_json_tool_call(raw)
     if json_call:
@@ -399,6 +432,58 @@ def _contains_dsml_tool_call(raw: str) -> bool:
         if tag in _DSML_TOOL_START_TAGS:
             return True
     return False
+
+
+def _contains_xml_tool_container(raw: str) -> bool:
+    return bool(re.search(r"<\s*/?\s*tool_calls\b", raw, re.IGNORECASE))
+
+
+def _contains_direct_xml_tool_tag(raw: str) -> bool:
+    pattern = _direct_tool_tag_pattern()
+    for match in pattern.finditer(raw):
+        prefix = raw[:match.start()]
+        if prefix.strip() and not _opening_tag_has_attributes(match.group(0)):
+            continue
+        return True
+    return False
+
+
+def _parse_xml_tool_calls_container(
+    raw: str,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> list[dict[str, Any]]:
+    body = _strip_outer_tag(raw, "tool_calls").strip()
+    if not body:
+        return []
+    return _parse_direct_xml_tool_calls(body, mode=mode)
+
+
+def _parse_direct_xml_tool_calls(
+    raw: str,
+    mode: str | None = TEXT_TOOL_MODE_STRUCTURED,
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for match in _iter_direct_tool_tag_matches(raw):
+        tag = match.group("tag").casefold().replace("-", "_")
+        call = _parse_direct_tag_match(match, tag)
+        if call:
+            calls.append(call)
+    return calls
+
+
+def _iter_direct_tool_tag_matches(raw: str) -> list[re.Match[str]]:
+    pattern = _direct_tool_tag_pattern()
+    return list(pattern.finditer(raw))
+
+
+def _direct_tool_tag_pattern() -> re.Pattern[str]:
+    tags = "|".join(re.escape(tag) for tag in sorted(_SINGLE_TOOL_TAGS, key=len, reverse=True))
+    return re.compile(
+        rf"<\s*(?P<tag>{tags})\b(?P<attrs>[^>]*)>"
+        rf"(?P<body>.*?)"
+        rf"</\s*(?P=tag)\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
 
 
 def _parse_dsml_tool_calls(raw: str) -> list[dict[str, Any]]:
@@ -570,9 +655,19 @@ def _parse_single_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
 
 
 def _parse_direct_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
+    pattern = _direct_tool_tag_pattern()
+    match = pattern.fullmatch(raw.strip())
+    if match:
+        return _parse_direct_tag_match(match, tag)
+    if re.match(rf"^\s*<\s*{re.escape(tag)}\b", raw, flags=re.IGNORECASE):
+        return _build_malformed_text_tool_call(
+            raw,
+            reason="The direct XML text tool call is incomplete or invalid.",
+        )
+
     body = _strip_outer_tag(raw, tag).strip()
     if not body:
-        return _build_text_tool_call(tag, {}, raw)
+        return _build_text_tool_call(tag, _normalize_argument_names(tag, {}), raw)
 
     arguments = _extract_direct_tag_parameters(body)
     if arguments:
@@ -582,6 +677,94 @@ def _parse_direct_tag_tool_call(raw: str, tag: str) -> dict[str, Any] | None:
     if argument_name:
         return _build_text_tool_call(tag, {argument_name: _coerce_parameter_value(body)}, raw)
     return _build_text_tool_call(tag, {}, raw)
+
+
+def _parse_direct_tag_match(match: re.Match[str], tag: str) -> dict[str, Any] | None:
+    raw = match.group(0)
+    raw_attrs = match.group("attrs") or ""
+    body = match.group("body") or ""
+    arguments = _extract_opening_tag_attributes(tag, raw_attrs)
+    body_arguments = _extract_direct_tag_parameters(body.strip())
+    for key, value in body_arguments.items():
+        arguments.setdefault(key, value)
+
+    body_text = body.strip()
+    if body_text:
+        _add_direct_tag_body_argument(tag, arguments, body_text)
+
+    normalized_arguments = _normalize_argument_names(tag, arguments)
+    return _build_text_tool_call(tag, normalized_arguments, raw)
+
+
+def _extract_opening_tag_attributes(tool_name: str, raw_attrs: str) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    for key, value in _parse_attributes(raw_attrs).items():
+        arguments[key] = _coerce_attribute_value(tool_name, key, value)
+    return arguments
+
+
+def _coerce_attribute_value(tool_name: str, key: str, value: str) -> Any:
+    stripped = _strip_quotes_preserving_backslashes(value.strip())
+    normalized_tool = _normalize_name(tool_name)
+    normalized_key = _normalize_name(key)
+    if (normalized_tool, normalized_key) in _KNOWN_INTEGER_ARGUMENTS:
+        try:
+            return int(stripped)
+        except ValueError:
+            return stripped
+    if (normalized_tool, normalized_key) in _KNOWN_NUMBER_ARGUMENTS:
+        try:
+            return float(stripped)
+        except ValueError:
+            return stripped
+    if (stripped.startswith("[") and stripped.endswith("]")) or (
+        stripped.startswith("{") and stripped.endswith("}")
+    ):
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+    return stripped
+
+
+def _add_direct_tag_body_argument(
+    tag: str,
+    arguments: dict[str, Any],
+    body: str,
+) -> None:
+    normalized_name = _normalize_name(tag)
+    normalized_arguments = {
+        _normalize_name(str(key)): key
+        for key in arguments
+    }
+
+    if normalized_name in {"read", "readfile", "openfile"}:
+        _set_body_default(arguments, normalized_arguments, "file_path", body)
+    elif normalized_name in {"glob", "listfiles", "findfiles", "grep", "searchcontent"}:
+        _set_body_default(arguments, normalized_arguments, "pattern", body)
+    elif normalized_name in {"bash", "shell", "runcommand", "powershell", "pwsh"}:
+        _set_body_default(arguments, normalized_arguments, "command", body)
+    elif normalized_name in {"write", "writefile"}:
+        if arguments:
+            _set_body_default(arguments, normalized_arguments, "content", body)
+        else:
+            _set_body_default(arguments, normalized_arguments, "file_path", body)
+    elif normalized_name in {"edit", "editfile"}:
+        _set_body_default(arguments, normalized_arguments, "new_string", body)
+    else:
+        argument_name = _single_tag_argument_name(tag)
+        if argument_name:
+            _set_body_default(arguments, normalized_arguments, argument_name, body)
+
+
+def _set_body_default(
+    arguments: dict[str, Any],
+    normalized_arguments: dict[str, str],
+    key: str,
+    value: str,
+) -> None:
+    if _normalize_name(key) not in normalized_arguments:
+        arguments[key] = value
 
 
 def _extract_direct_tag_parameters(body: str) -> dict[str, Any]:
@@ -901,9 +1084,9 @@ def _normalize_argument_names(tool_name: str, arguments: dict[str, Any]) -> dict
             elif normalized_key in {"glob", "query"}:
                 target_key = "pattern"
         elif normalized_name in {"grep", "searchcontent"}:
-            if normalized_key in {"regex", "query", "text"}:
+            if normalized_key in {"regex", "query", "search", "text"}:
                 target_key = "pattern"
-            elif normalized_key in {"directory", "dir", "root", "cwd"}:
+            elif normalized_key in {"file", "filepath", "filename", "directory", "dir", "root", "cwd"}:
                 target_key = "path"
         elif normalized_name in {"bash", "shell", "runcommand", "powershell", "pwsh"}:
             if normalized_key in {"cmd", "commandline", "script"}:
@@ -914,6 +1097,16 @@ def _normalize_argument_names(tool_name: str, arguments: dict[str, Any]) -> dict
         elif normalized_name in {"webfetch", "fetchurl"}:
             if normalized_key in {"href", "link"}:
                 target_key = "url"
+        elif normalized_name in {"write", "writefile"}:
+            if normalized_key in {"path", "file", "filepath", "filename"}:
+                target_key = "file_path"
+            elif normalized_key in {"text", "body", "value"}:
+                target_key = "content"
+        elif normalized_name in {"edit", "editfile"}:
+            if normalized_key in {"path", "file", "filepath", "filename"}:
+                target_key = "file_path"
+            elif normalized_key in {"text", "body", "value"}:
+                target_key = "new_string"
         elif normalized_name in {"agent", "task", "subagent", "delegate"}:
             if normalized_key in {"task", "input", "instructions", "instruction"}:
                 target_key = "prompt"
@@ -1021,7 +1214,7 @@ def _tool_start_tags_for_mode(mode: str) -> tuple[str, ...]:
         return ()
     if mode == TEXT_TOOL_MODE_MIMO:
         return _MIMO_TOOL_START_TAGS
-    return _TOOL_BLOCK_TAGS
+    return _STRUCTURED_TOOL_START_TAGS
 
 
 def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] | None:
@@ -1039,6 +1232,12 @@ def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] |
             after = lower[after_index]
             if after not in {" ", "\t", "\r", "\n", ">"}:
                 continue
+        if (
+            tag in _SINGLE_TOOL_TAGS
+            and text[:start].strip()
+            and not _opening_tag_has_attributes(text[start:])
+        ):
+            continue
         if best is None or start < best[0]:
             best = (start, tag)
 
@@ -1049,6 +1248,15 @@ def _find_next_tool_start(text: str, tags: tuple[str, ...]) -> tuple[int, str] |
     if generic_match is not None and (best is None or generic_match[0] < best[0]):
         best = generic_match
     return best
+
+
+def _opening_tag_has_attributes(text: str) -> bool:
+    end = text.find(">")
+    if end == -1:
+        return False
+    opening = text[:end]
+    match = re.match(r"<\s*[a-zA-Z_][\w.-]*\b(?P<attrs>.*)$", opening, flags=re.DOTALL)
+    return bool(match and match.group("attrs").strip())
 
 
 def _find_next_dsml_tool_start(text: str) -> tuple[int, str] | None:

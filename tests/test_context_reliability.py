@@ -26,7 +26,11 @@ from coomi.services.llm.generic import (
     _strip_thinking_tags,
 )
 from coomi.services.llm.provider import LLMProvider
-from coomi.services.llm.text_tool_calls import TextToolCallFilter, parse_text_tool_call
+from coomi.services.llm.text_tool_calls import (
+    TextToolCallFilter,
+    parse_text_tool_call,
+    strip_text_tool_calls,
+)
 from coomi.tools.base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 from coomi.tools.registry import ToolRegistry, create_default_registry
 from coomi.tools.agent import AgentTool
@@ -457,6 +461,36 @@ class AlwaysMalformedTextToolProvider(MalformedThenValidTextToolProvider):
             "type": "content",
             "content": '{"name":"Read","arguments":',
         }
+
+
+class MalformedXmlToolCallsProvider(LLMProvider):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="ok")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "ok"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "content",
+                "content": '<tool_calls>\n<read file="F:/x.md"\n</tool_calls>',
+            }
+        else:
+            yield {"type": "content", "content": "done"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "fake"
+
+    def get_text_tool_mode(self) -> str:
+        return "structured"
 
 
 class RepeatingReadToolProvider(LLMProvider):
@@ -1121,6 +1155,101 @@ def test_text_tool_call_filter_parses_dsml_tool_calls_without_leaking_markup():
     }
 
 
+def test_structured_text_tool_parser_parses_plural_xml_container_direct_tag():
+    sample = """
+<tool_calls>
+<read file="F:/x.md" limit="80">
+</read>
+</tool_calls>
+"""
+
+    visible, calls = strip_text_tool_calls(sample, mode="structured")
+
+    assert (visible or "").strip() == ""
+    assert len(calls) == 1
+    assert calls[0]["name"].lower() in {"read", "read_file"}
+    assert calls[0]["arguments"] == {
+        "file_path": "F:/x.md",
+        "limit": 80,
+    }
+    assert calls[0]["source"] == "text_fallback"
+
+
+def test_structured_text_tool_parser_streams_plural_xml_container_direct_tag():
+    stream_filter = TextToolCallFilter(mode="structured")
+    visible_1, calls_1 = stream_filter.feed("<tool")
+    visible_2, calls_2 = stream_filter.feed('_calls>\n<read file="F:/x.md" limit="80">')
+    visible_3, calls_3 = stream_filter.feed("</read>\n</tool_calls>")
+    tail, calls_4 = stream_filter.flush()
+
+    visible = visible_1 + visible_2 + visible_3 + tail
+    calls = calls_1 + calls_2 + calls_3 + calls_4
+
+    assert visible.strip() == ""
+    assert len(calls) == 1
+    assert calls[0]["arguments"]["file_path"] == "F:/x.md"
+    assert calls[0]["arguments"]["limit"] == 80
+
+
+def test_structured_text_tool_parser_parses_direct_tag_without_container():
+    raw = '<read file="F:/x.md" limit="80"></read>'
+    call = parse_text_tool_call(raw, mode="structured")
+
+    assert call is not None
+    assert call["arguments"] == {
+        "file_path": "F:/x.md",
+        "limit": 80,
+    }, call
+
+
+def test_structured_text_tool_parser_direct_tag_body_fallback():
+    call = parse_text_tool_call("<read>F:/x.md</read>", mode="structured")
+
+    assert call is not None
+    assert call["arguments"]["file_path"] == "F:/x.md"
+
+
+def test_structured_text_tool_parser_write_body_content():
+    call = parse_text_tool_call('<write file="temp/a.md">hello</write>', mode="structured")
+
+    assert call is not None
+    assert call["arguments"]["file_path"] == "temp/a.md"
+    assert call["arguments"]["content"] == "hello"
+
+
+def test_structured_text_tool_parser_parses_multiple_direct_tags_in_container():
+    visible, calls = strip_text_tool_calls(
+        """
+<tool_calls>
+<read file="F:/x.md" limit="80"></read>
+<glob pattern="**/*.md"></glob>
+</tool_calls>
+""",
+        mode="structured",
+    )
+
+    assert (visible or "").strip() == ""
+    assert [call["name"] for call in calls] == ["read", "glob"]
+    assert calls[0]["arguments"] == {"file_path": "F:/x.md", "limit": 80}
+    assert calls[1]["arguments"] == {"pattern": "**/*.md"}
+
+
+def test_structured_text_tool_parser_malformed_xml_does_not_leak_visible_text():
+    visible, calls = strip_text_tool_calls(
+        """
+<tool_calls>
+<read file="F:/x.md"
+</tool_calls>
+""",
+        mode="structured",
+    )
+
+    assert (visible or "").strip() == ""
+    assert len(calls) == 1
+    assert calls[0]["name"] == "InvalidToolCall"
+    assert calls[0]["parse_error"]
+
+
 def test_text_tool_call_filter_preserves_dsml_string_whitespace():
     stream_filter = TextToolCallFilter()
     visible, calls = stream_filter.feed(
@@ -1325,7 +1454,9 @@ def test_text_tool_call_filter_does_not_parse_single_tags_by_default():
 
     assert visible + tail == "Example: <bash>echo hello</bash> is a tag."
     assert calls + tail_calls == []
-    assert parse_text_tool_call("<read_file> C:\\tmp\\a.txt </read_file>") is None
+    call = parse_text_tool_call("<read_file> C:\\tmp\\a.txt </read_file>")
+    assert call is not None
+    assert call["arguments"] == {"file_path": "C:\\tmp\\a.txt"}
 
 
 def test_text_tool_call_filter_does_not_misread_plain_language():
@@ -1685,6 +1816,33 @@ async def test_agent_loop_stops_repeated_malformed_text_tool_calls(tmp_path: Pat
     assert any(
         getattr(event, "message", "").startswith("Stopped malformed text tool-call recovery")
         for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_malformed_xml_tool_calls_do_not_leak_to_visible_text(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = CountingTool(output="read result")
+    registry.register(tool)
+    session = Session(id="s", system_prompt="sys")
+    provider = MalformedXmlToolCallsProvider()
+    agent = AgentLoop(
+        provider,
+        registry,
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
+
+    events = [event async for event in agent.run_stream(session, "please read a file")]
+
+    visible_text = "".join(event.content for event in events if isinstance(event, TextChunk))
+    assert "<tool_calls>" not in visible_text
+    assert "<read" not in visible_text
+    assert "done" in visible_text
+    assert tool.calls == 0
+    assert any(
+        msg.role == "tool" and "Malformed text tool call detected" in (msg.content or "")
+        for msg in session.messages
     )
 
 
