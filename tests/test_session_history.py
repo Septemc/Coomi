@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from coomi.engine.session import SessionManager, add_assistant_message, add_tool_result, add_user_message
-from coomi.services.llm.config import ProviderConfig
+from coomi.services.llm.config import PRESET_PROVIDERS, ProviderConfig
 from coomi.services.session_history import list_session_records, load_session_from_jsonl
 from coomi.types import ToolCall
 
@@ -128,3 +128,15 @@ def test_provider_tool_protocol_auto_infers_text_modes():
     assert minimax.text_tool_mode() == "structured"
     assert generic.resolved_tool_protocol() == "structured"
     assert generic.text_tool_mode() == "structured"
+
+
+def test_deepseek_presets_cover_openai_and_anthropic_compatible_modes():
+    openai_preset = PRESET_PROVIDERS["deepseek-openai"]
+    anthropic_preset = PRESET_PROVIDERS["deepseek-anthropic"]
+
+    assert openai_preset["type"] == "generic"
+    assert openai_preset["base_url"] == "https://api.deepseek.com"
+    assert openai_preset["tool_protocol"] == "structured"
+    assert anthropic_preset["type"] == "anthropic"
+    assert anthropic_preset["base_url"] == "https://api.deepseek.com/anthropic"
+    assert anthropic_preset["tool_protocol"] == "native"

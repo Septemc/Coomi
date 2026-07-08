@@ -32,6 +32,7 @@ from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
 from ..services.session_history import list_session_records, load_session_from_jsonl
 from ..services.llm.factory import get_config_manager
+from ..services.update_check import build_update_prompt_suffix, check_for_update
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
 from ..services.memory.extractor import MemoryExtractor
 from ..services.context.compressor import _estimate_tokens_from_dicts
@@ -75,7 +76,7 @@ from .widgets.status_panel import StatusPanel
 from .widgets.streaming_preview import StreamingPreview
 from .widgets.tool_call_banner import ToolCallBanner
 from .widgets.prompt_text_area import PromptTextArea
-from .screens.main_screen import MainScreen
+from .screens.main_screen import PROMPT_PLACEHOLDER, MainScreen
 from .screens.command_palette import CommandPalette
 
 SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -416,8 +417,23 @@ class CoomiApp(App):
 
         # Wait for screen to be ready before querying widgets
         self.call_after_refresh(self._show_welcome_message)
+        self.call_after_refresh(self._start_update_check)
 
     # -- command palette ---------------------------------------------------
+
+    def _start_update_check(self) -> None:
+        asyncio.create_task(self._check_for_update_notice())
+
+    async def _check_for_update_notice(self) -> None:
+        result = await asyncio.to_thread(check_for_update)
+        suffix = build_update_prompt_suffix(result)
+        if not suffix:
+            return
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+            prompt.placeholder = f"{PROMPT_PLACEHOLDER}。{suffix}"
+        except Exception:
+            pass
 
     def action_command_palette(self) -> None:
         """Ctrl+P: 打开命令面板"""

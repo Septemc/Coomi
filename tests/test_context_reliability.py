@@ -20,6 +20,11 @@ from coomi.security import PermissionLevel, PermissionMode, PermissionSystem
 from coomi.services.context.compressor import ContextCompressor
 from coomi.services.context.message_guard import SYNTHETIC_TOOL_RESULT
 from coomi.services.llm.config import ProviderConfig
+from coomi.services.llm.anthropic import (
+    AnthropicProvider,
+    _merge_final_tool_inputs,
+    _parse_anthropic_tool_input,
+)
 from coomi.services.llm.generic import (
     GenericOpenAIProvider,
     ThinkingTagFilter,
@@ -783,6 +788,80 @@ def test_message_guard_mixed_native_and_text_fallback_is_provider_safe():
     assert "Read" in transcript
     assert "a.txt" in transcript
     assert "read result" in transcript
+
+
+def test_anthropic_message_conversion_coalesces_consecutive_tool_results():
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    messages = [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": '{"file_path":"a.md"}'},
+                },
+                {
+                    "id": "toolu_2",
+                    "type": "function",
+                    "function": {"name": "Glob", "arguments": '{"pattern":"*.md"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "read ok"},
+        {"role": "tool", "tool_call_id": "toolu_2", "content": "glob ok"},
+    ]
+
+    system, converted = provider._convert_messages(messages)
+
+    assert system == "sys"
+    assert converted[0]["role"] == "assistant"
+    assert [block["type"] for block in converted[0]["content"]] == ["tool_use", "tool_use"]
+    assert converted[1] == {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "read ok"},
+            {"type": "tool_result", "tool_use_id": "toolu_2", "content": "glob ok"},
+        ],
+    }
+
+
+def test_anthropic_stream_parser_accepts_direct_tool_input_dict():
+    arguments, raw, error = _parse_anthropic_tool_input(
+        {"file_path": "F:/x.md", "limit": 80},
+        "",
+    )
+
+    assert arguments == {"file_path": "F:/x.md", "limit": 80}
+    assert raw == '{"file_path": "F:/x.md", "limit": 80}'
+    assert error is None
+
+
+def test_anthropic_stream_parser_fills_missing_input_from_final_message():
+    accum = {
+        0: {
+            "id": "toolu_1",
+            "name": "Read",
+            "json_fragments": [],
+            "input": None,
+        }
+    }
+    final_msg = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="toolu_1",
+                name="Read",
+                input={"file_path": "F:/x.md"},
+            )
+        ]
+    )
+
+    _merge_final_tool_inputs(accum, final_msg)
+
+    assert accum[0]["input"] == {"file_path": "F:/x.md"}
 
 
 def test_compressor_trim_keeps_tool_call_group_together():

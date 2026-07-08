@@ -8,6 +8,22 @@ from pathlib import Path
 
 # 预设 Provider 配置 — 用户可通过 UI 快速创建
 PRESET_PROVIDERS: dict[str, dict] = {
+    "deepseek-openai": {
+        "type": "generic",
+        "display": "DeepSeek (OpenAI compatible)",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "fast_model": "deepseek-chat",
+        "tool_protocol": "structured",
+    },
+    "deepseek-anthropic": {
+        "type": "anthropic",
+        "display": "DeepSeek (Anthropic compatible)",
+        "base_url": "https://api.deepseek.com/anthropic",
+        "model": "deepseek-chat",
+        "fast_model": "deepseek-chat",
+        "tool_protocol": "native",
+    },
     "mimo-openai": {
         "type": "generic",
         "display": "MIMO V2.5 Pro (OpenAI)",

@@ -22,6 +22,9 @@ from ..widgets.streaming_preview import StreamingPreview
 from ..widgets.welcome_panel import WelcomePanel
 
 
+PROMPT_PLACEHOLDER = '输入消息（Enter发送，Shift+Enter换行，输入“/”查看指令，双Esc退出）'
+
+
 class MainScreen(Screen):
     """主交互屏幕"""
 
@@ -63,6 +66,7 @@ class MainScreen(Screen):
         )
 
     def on_mount(self) -> None:
+        self.prompt_input.placeholder = PROMPT_PLACEHOLDER
         self.message_log.display = False
         self.welcome_panel.display = True
         self.call_after_refresh(self.focus_prompt_input)

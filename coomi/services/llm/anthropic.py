@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-import anthropic
 import httpx
 
 from ...types import LLMResponse, ToolCall
@@ -23,6 +22,13 @@ class AnthropicProvider(LLMProvider):
         kwargs = {"api_key": config.api_key, "timeout": timeout}
         if config.base_url:
             kwargs["base_url"] = config.base_url
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError(
+                "Anthropic provider 需要安装 anthropic 包：\n"
+                "  pip install coomi-agent[anthropic]"
+            )
         self.client = anthropic.AsyncAnthropic(**kwargs)
         self.model = config.model
 
@@ -38,24 +44,28 @@ class AnthropicProvider(LLMProvider):
     ) -> tuple[str, list[dict[str, Any]]]:
         system = ""
         converted = []
+        i = 0
 
-        for msg in messages:
+        while i < len(messages):
+            msg = messages[i]
             if msg["role"] == "system":
                 system = msg.get("content", "")
+                i += 1
             elif msg["role"] == "tool":
-                tool_use_id = msg.get("tool_call_id", "")
-                if not tool_use_id:
-                    continue  # 跳过无 ID 的 tool result，避免 API 400
-                converted.append({
-                    "role": "user",
-                    "content": [
-                        {
+                content_blocks = []
+                while i < len(messages) and messages[i]["role"] == "tool":
+                    tool_msg = messages[i]
+                    tool_use_id = tool_msg.get("tool_call_id", "")
+                    if tool_use_id:
+                        content_blocks.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": msg.get("content", ""),
-                        }
-                    ],
-                })
+                            "content": tool_msg.get("content", "") or "(Tool completed with no output)",
+                        })
+                    i += 1
+                if content_blocks:
+                    converted.append({"role": "user", "content": content_blocks})
+                continue
             elif msg["role"] == "assistant" and msg.get("tool_calls"):
                 content = []
                 if msg.get("content"):
@@ -79,8 +89,10 @@ class AnthropicProvider(LLMProvider):
                         "input": args,
                     })
                 converted.append({"role": "assistant", "content": content})
+                i += 1
             else:
                 converted.append(msg)
+                i += 1
 
         return system, converted
 
@@ -188,10 +200,12 @@ class AnthropicProvider(LLMProvider):
             async for event in stream:
                 if event.type == "content_block_start":
                     if event.content_block.type == "tool_use":
+                        initial_input = getattr(event.content_block, "input", None)
                         tool_input_accum[event.index] = {
                             "id": event.content_block.id,
                             "name": event.content_block.name,
                             "json_fragments": [],
+                            "input": initial_input,
                         }
                         yield {
                             "type": "tool_call_start",
@@ -210,6 +224,8 @@ class AnthropicProvider(LLMProvider):
 
             final_msg = await stream.get_final_message()
 
+        _merge_final_tool_inputs(tool_input_accum, final_msg)
+
         if final_msg.usage:
             yield {
                 "type": "usage",
@@ -223,12 +239,10 @@ class AnthropicProvider(LLMProvider):
         for idx in sorted(tool_input_accum.keys()):
             acc = tool_input_accum[idx]
             raw_arguments = "".join(acc["json_fragments"])
-            try:
-                arguments = json.loads(raw_arguments)
-                parse_error = None
-            except (json.JSONDecodeError, KeyError) as exc:
-                arguments = {}
-                parse_error = str(exc)
+            arguments, raw_arguments, parse_error = _parse_anthropic_tool_input(
+                acc.get("input"),
+                raw_arguments,
+            )
             yield {
                 "type": "tool_call",
                 "data": {
@@ -239,3 +253,49 @@ class AnthropicProvider(LLMProvider):
                     "parse_error": parse_error,
                 },
             }
+
+
+def _merge_final_tool_inputs(
+    tool_input_accum: dict[int, dict[str, Any]],
+    final_msg: Any,
+) -> None:
+    """Fill missing tool inputs from the final Anthropic message."""
+    for idx, block in enumerate(getattr(final_msg, "content", []) or []):
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        acc = tool_input_accum.setdefault(
+            idx,
+            {
+                "id": getattr(block, "id", f"toolu_{idx}"),
+                "name": getattr(block, "name", ""),
+                "json_fragments": [],
+                "input": None,
+            },
+        )
+        if not acc.get("id"):
+            acc["id"] = getattr(block, "id", f"toolu_{idx}")
+        if not acc.get("name"):
+            acc["name"] = getattr(block, "name", "")
+        if acc.get("input") in (None, {}, ""):
+            acc["input"] = getattr(block, "input", None)
+
+
+def _parse_anthropic_tool_input(
+    direct_input: Any,
+    raw_json: str,
+) -> tuple[dict[str, Any], str, str | None]:
+    if isinstance(direct_input, dict) and direct_input:
+        return direct_input, json.dumps(direct_input, ensure_ascii=False), None
+    if isinstance(direct_input, str) and direct_input.strip():
+        raw_json = direct_input.strip()
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            return {}, raw_json, str(exc)
+        if isinstance(parsed, dict):
+            return parsed, raw_json, None
+        return {}, raw_json, "Anthropic tool input must be a JSON object."
+    if isinstance(direct_input, dict):
+        return direct_input, json.dumps(direct_input, ensure_ascii=False), None
+    return {}, raw_json, None

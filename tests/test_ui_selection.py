@@ -8,7 +8,13 @@ from textual.app import App, ComposeResult
 from textual.strip import Strip
 from textual.widgets.text_area import Selection
 
+from coomi.services.update_check import (
+    UpdateCheckResult,
+    build_update_prompt_suffix,
+    is_newer_version,
+)
 from coomi.ui.screens.main_screen import MainScreen
+from coomi.ui.screens.main_screen import PROMPT_PLACEHOLDER
 from coomi.ui.screens.settings_screen import SettingsScreen
 from coomi.ui.status_line import StatusLine
 from coomi.ui.textual_app import CoomiApp
@@ -169,6 +175,21 @@ async def test_main_screen_focuses_prompt_on_mount():
 
         assert app.focused is prompt
         assert prompt.text == "hi"
+        assert prompt.placeholder == PROMPT_PLACEHOLDER
+
+
+def test_update_prompt_suffix_mentions_current_and_latest_versions():
+    suffix = build_update_prompt_suffix(
+        UpdateCheckResult(
+            current_version="0.1.12",
+            latest_version="0.1.13",
+            update_available=True,
+        )
+    )
+
+    assert suffix == "当前使用的是0.1.12，建议通过“pip install -U coomi-agent”更新到0.1.13"
+    assert is_newer_version("0.1.13", "0.1.12")
+    assert not is_newer_version("0.1.12", "0.1.12")
 
 
 @pytest.mark.asyncio
