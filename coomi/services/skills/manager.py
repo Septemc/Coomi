@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from .config import SkillConfig
@@ -12,8 +13,9 @@ from .installer import (
     install_from_github,
     is_github_url,
     normalize_skill_name,
+    resolve_github_commit,
 )
-from .models import SkillRecord, utc_now
+from .models import SkillRecord, SkillUpdateStatus, utc_now
 
 
 class SkillManager:
@@ -83,6 +85,48 @@ class SkillManager:
         if record.source_type == "local":
             return self._install_local(Path(record.source), name=record.name, enabled=record.enabled)
         raise SkillInstallError(f"Unsupported source type: {record.source_type}")
+
+    def check_update(self, name: str) -> SkillUpdateStatus:
+        record = self._require(name)
+        if record.source_type == "local":
+            return SkillUpdateStatus(
+                name=record.name,
+                source_type="local",
+                update_available=True,
+                message="本地来源可重新扫描并安装；再次按 Enter 应用。",
+            )
+        if record.source_type != "github":
+            raise SkillInstallError(f"Unsupported source type: {record.source_type}")
+
+        try:
+            remote_commit, immutable = resolve_github_commit(record.source)
+        except (OSError, subprocess.SubprocessError, SkillInstallError) as exc:
+            return SkillUpdateStatus(
+                name=record.name,
+                source_type="github",
+                current_commit=record.commit,
+                message="检查更新失败。",
+                error=str(exc),
+            )
+
+        if immutable:
+            return SkillUpdateStatus(
+                name=record.name,
+                source_type="github",
+                current_commit=record.commit,
+                remote_commit=remote_commit,
+                update_available=False,
+                message="该 Skill 固定到 tag 或 commit，不自动跟随更新。",
+            )
+        update_available = not record.commit or record.commit != remote_commit
+        return SkillUpdateStatus(
+            name=record.name,
+            source_type="github",
+            current_commit=record.commit,
+            remote_commit=remote_commit,
+            update_available=update_available,
+            message="发现新版本。" if update_available else "已是最新版本。",
+        )
 
     def enable(self, name: str, enabled: bool = True) -> SkillRecord:
         record = self._require(name)

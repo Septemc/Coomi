@@ -5,12 +5,12 @@ Tab 切换字段，Enter 保存，Esc 返回。
 """
 from __future__ import annotations
 
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Select, Static
-from textual import on
 
 from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS, TOOL_PROTOCOLS
 
@@ -24,6 +24,39 @@ FIELD_DEFS = [
     ("model", "模型名", "如 deepseek-v4-pro"),
     ("fast_model", "快速模型 (可选)", "如 deepseek-v4-flash"),
 ]
+
+FIELD_HELP = {
+    "id": (
+        "[bold]Provider ID[/bold]\n本地唯一标识，建议只使用字母、数字和连字符。"
+        "编辑时修改 ID 会迁移配置；如果它是当前 Provider，保存后会同步切换到新 ID。"
+    ),
+    "type": (
+        "[bold]接口类型[/bold]\ngeneric：OpenAI-compatible 通用接口；openai：OpenAI 原生接口；"
+        "anthropic：Anthropic Messages 兼容接口。品牌名称不一定等于协议类型。"
+    ),
+    "tool_protocol": (
+        "[bold]Tool protocol[/bold]\nauto：自动判断（推荐）；native：服务端原生 tool/function calling；"
+        "structured：结构化文本兼容；mimo：MiMo 文本工具格式；disabled：完全禁用工具。"
+        "不确定时选择 auto。"
+    ),
+    "display": "[bold]显示名称[/bold]\n只用于界面显示，不会发送给模型服务。",
+    "api_key": (
+        "[bold]API Key[/bold]\n服务商密钥，保存在 ~/.coomi/config/providers.json。"
+        "不要复制到日志、截图或公开仓库；界面以密码形式隐藏输入。"
+    ),
+    "base_url": (
+        "[bold]Base URL[/bold]\n填写服务商文档给出的 API 根地址。OpenAI-compatible 服务常见以 /v1 结尾，"
+        "但也有服务要求不带 /v1；Anthropic-compatible 地址同样以服务商文档为准。"
+    ),
+    "model": "[bold]模型名[/bold]\n必须使用服务商当前提供的准确模型 ID，而不是营销展示名称。",
+    "fast_model": (
+        "[bold]快速模型（可选）[/bold]\n用于记忆提取、召回等轻量任务。留空时这些任务使用当前主模型。"
+    ),
+    "preset": (
+        "[bold]Provider 预设[/bold]\n预设只填充接口类型、地址和建议模型；"
+        "仍需填写自己的 API Key，并按服务商最新文档核对模型名和 Base URL。"
+    ),
+}
 
 # 预设选项列表
 PRESET_OPTIONS = [
@@ -92,10 +125,25 @@ class ProviderEditScreen(ModalScreen[bool]):
                     yield Input(
                         value=value,
                         placeholder=hint,
+                        password=(key == "api_key"),
                         id=f"field-{key}",
                     )
                 yield Static("")
                 yield Static("  [dim]Tab 切换字段  Ctrl+S 保存  Esc 取消[/dim]")
+            yield Static(FIELD_HELP["preset"], id="provider-field-help")
+            yield Static("", id="provider-edit-error")
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        widget_id = event.widget.id or ""
+        if widget_id == "preset-select":
+            key = "preset"
+        elif widget_id.startswith("field-"):
+            key = widget_id.removeprefix("field-")
+        else:
+            return
+        help_text = FIELD_HELP.get(key)
+        if help_text:
+            self.query_one("#provider-field-help", Static).update(help_text)
 
     @on(Input.Submitted)
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -131,6 +179,7 @@ class ProviderEditScreen(ModalScreen[bool]):
 
     def action_save(self) -> None:
         """保存 Provider 配置"""
+        self.query_one("#provider-edit-error", Static).update("")
         values = {}
         for key, _, _ in FIELD_DEFS:
             try:
@@ -141,25 +190,25 @@ class ProviderEditScreen(ModalScreen[bool]):
 
         # 验证必填字段
         if not values.get("id"):
-            self.app._show_command_result("[red]Provider ID 不能为空[/red]")
+            self._show_error("Provider ID 不能为空")
             return
         if not values.get("api_key"):
-            self.app._show_command_result("[red]API Key 不能为空[/red]")
+            self._show_error("API Key 不能为空")
             return
         if not values.get("model"):
-            self.app._show_command_result("[red]模型名不能为空[/red]")
+            self._show_error("模型名不能为空")
             return
         provider_type = (values.get("type") or "generic").lower()
         if provider_type == "deepseek":
             provider_type = "generic"
         if provider_type not in {"generic", "openai", "anthropic"}:
-            self.app._show_command_result("[red]类型只能是 generic / openai / anthropic[/red]")
+            self._show_error("类型只能是 generic / openai / anthropic")
             return
 
         tool_protocol = (values.get("tool_protocol") or "auto").lower().replace("-", "_")
         if tool_protocol not in TOOL_PROTOCOLS:
-            self.app._show_command_result(
-                "[red]Tool protocol must be auto / native / structured / mimo / disabled[/red]"
+            self._show_error(
+                "Tool protocol 必须是 auto / native / structured / mimo / disabled"
             )
             return
 
@@ -181,6 +230,9 @@ class ProviderEditScreen(ModalScreen[bool]):
         if was_active and old_id != config.id:
             self._config_mgr.set_active(config.id)
         self.dismiss(True)
+
+    def _show_error(self, message: str) -> None:
+        self.query_one("#provider-edit-error", Static).update(f"[bold red]{message}[/bold red]")
 
     def action_cancel(self) -> None:
         self.dismiss(False)

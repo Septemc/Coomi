@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 
 import pytest
 
 from coomi.engine.session import build_system_prompt
 from coomi.services.mcp.config import McpConfigStore
+from coomi.services.mcp.client import StdioMcpClient
 from coomi.services.mcp.manager import McpManager
 from coomi.services.mcp.models import McpServerConfig, McpToolSpec
 from coomi.services.mcp import manager as mcp_manager_module
 from coomi.services.mcp import tool_adapter as mcp_adapter_module
 from coomi.services.skills.config import SkillConfig
-from coomi.services.skills.installer import parse_github_url
+from coomi.services.skills.installer import parse_github_url, resolve_github_commit
 from coomi.services.skills.manager import SkillManager
 from coomi.tools.registry import ToolRegistry
 from coomi.ui.textual_app import CoomiApp
@@ -84,6 +87,15 @@ def test_github_skill_url_supports_ref_and_subdir() -> None:
     assert source.subdir == "skills/python"
 
 
+def test_github_skill_short_commit_is_treated_as_fixed_version():
+    commit, immutable = resolve_github_commit(
+        "https://github.com/org/repo/tree/abcdef1/skills/python"
+    )
+
+    assert commit == "abcdef1"
+    assert immutable is True
+
+
 def test_mcp_config_manager_add_enable_remove(tmp_path: Path) -> None:
     store = McpConfigStore(config_path=tmp_path / "mcp_servers.json")
     manager = McpManager(store)
@@ -100,12 +112,40 @@ def test_mcp_config_manager_add_enable_remove(tmp_path: Path) -> None:
     assert sse_server.transport == "sse"
     assert store.get("events").url == "https://example.com/sse"
 
+    catalog_server = manager.add_catalog_config(
+        {
+            "name": "catalog-demo",
+            "transport": "stdio",
+            "command": "demo",
+            "args": ["--stdio"],
+            "env": {},
+            "headers": {},
+            "catalog_id": "catalog-demo",
+            "catalog_signature": "signature",
+        }
+    )
+    persisted = store.get(catalog_server.name)
+    assert persisted.source_type == "catalog"
+    assert persisted.catalog_id == "catalog-demo"
+    assert persisted.catalog_signature == "signature"
+
     manager.enable("demo", enabled=False)
     assert store.get("demo").enabled is False
 
     removed = manager.remove("demo")
     assert removed.name == "demo"
     assert store.get("demo") is None
+
+
+def test_stdio_mcp_client_reads_json_lines_and_legacy_content_length():
+    client = StdioMcpClient(McpServerConfig(name="demo", command="fake"))
+    payload = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+    body = json.dumps(payload).encode("utf-8")
+
+    assert client._read_stream_message(io.BytesIO(body + b"\n")) == payload
+
+    framed = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+    assert client._read_stream_message(io.BytesIO(framed)) == payload
 
 
 def test_mcp_manager_registers_tool_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,6 +182,26 @@ def test_mcp_manager_registers_tool_adapters(tmp_path: Path, monkeypatch: pytest
 
     registry.unregister_prefix("mcp__demo__")
     assert registry.get("mcp__demo__echo") is None
+
+
+def test_mcp_manager_redacts_configured_secrets_from_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingClient:
+        def __init__(self, server):
+            raise RuntimeError(f"connection rejected token={server.env['TOKEN']}")
+
+    monkeypatch.setattr(mcp_manager_module, "open_mcp_client", FailingClient)
+    store = McpConfigStore(config_path=tmp_path / "mcp.json")
+    manager = McpManager(store)
+    manager.add_stdio("secret-demo", "fake", env={"TOKEN": "top-secret"})
+
+    ok, message = manager.test("secret-demo")
+
+    assert ok is False
+    assert "top-secret" not in message
+    assert "***" in message
+    assert "top-secret" not in store.get("secret-demo").last_error
 
 
 def test_mcp_tool_adapter_calls_remote_tool(monkeypatch: pytest.MonkeyPatch) -> None:

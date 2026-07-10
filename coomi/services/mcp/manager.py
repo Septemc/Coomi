@@ -78,6 +78,28 @@ class McpManager:
         self.config.put(server)
         return server
 
+    def add_catalog_config(self, rendered: dict) -> McpServerConfig:
+        transport = str(rendered.get("transport", "stdio"))
+        server = McpServerConfig(
+            name=_normalize_name(str(rendered.get("name", ""))),
+            transport=transport,
+            enabled=True,
+            command=str(rendered.get("command", "")),
+            args=[str(item) for item in rendered.get("args", [])],
+            env={str(k): str(v) for k, v in rendered.get("env", {}).items()},
+            url=str(rendered.get("url", "")),
+            headers={str(k): str(v) for k, v in rendered.get("headers", {}).items()},
+            source_type="catalog",
+            catalog_id=str(rendered.get("catalog_id", "")),
+            catalog_signature=str(rendered.get("catalog_signature", "")),
+        )
+        if transport == "stdio" and not server.command:
+            raise McpError("Catalog MCP stdio server requires a command")
+        if transport in {"http", "sse"} and not server.url:
+            raise McpError(f"Catalog MCP {transport} server requires a URL")
+        self.config.put(server)
+        return server
+
     def enable(self, name: str, enabled: bool = True) -> McpServerConfig:
         server = self._require(name)
         server.enabled = enabled
@@ -95,15 +117,16 @@ class McpManager:
         server = self._require(name)
         try:
             tools = self.list_tools(name)
+            server.tools_count = len(tools)
             server.last_error = ""
             server.last_checked_at = utc_now()
             self.config.put(server)
             return True, f"Connected. Tools discovered: {len(tools)}"
         except Exception as exc:
-            server.last_error = str(exc)
+            server.last_error = _redact_secrets(str(exc), server)
             server.last_checked_at = utc_now()
             self.config.put(server)
-            return False, str(exc)
+            return False, server.last_error
 
     def list_tools(self, name: str) -> list[McpToolSpec]:
         server = self._require(name)
@@ -114,14 +137,16 @@ class McpManager:
         registered: list[str] = []
         for server in self.list(enabled_only=True):
             try:
-                for spec in self.list_tools(server.name):
+                specs = self.list_tools(server.name)
+                for spec in specs:
                     adapter = McpToolAdapter(server, spec)
                     registry.register(adapter)
                     registered.append(adapter.name)
+                server.tools_count = len(specs)
                 server.last_error = ""
                 server.last_checked_at = utc_now()
             except Exception as exc:
-                server.last_error = str(exc)
+                server.last_error = _redact_secrets(str(exc), server)
                 server.last_checked_at = utc_now()
             self.config.put(server)
         return registered
@@ -157,3 +182,11 @@ def _normalize_name(name: str) -> str:
     if not cleaned:
         raise McpError("MCP server name cannot be empty")
     return cleaned[:80]
+
+
+def _redact_secrets(message: str, server: McpServerConfig) -> str:
+    redacted = message
+    for value in [*server.env.values(), *server.headers.values()]:
+        if value:
+            redacted = redacted.replace(value, "***")
+    return redacted

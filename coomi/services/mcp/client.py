@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
+import threading
 import time
 from typing import Any
 from urllib.parse import urljoin
@@ -19,7 +21,7 @@ class McpError(RuntimeError):
 
 
 class StdioMcpClient:
-    def __init__(self, server: McpServerConfig, timeout: float = 15.0):
+    def __init__(self, server: McpServerConfig, timeout: float = 30.0):
         if server.transport != "stdio":
             raise McpError(f"Unsupported MCP transport: {server.transport}")
         if not server.command:
@@ -28,33 +30,72 @@ class StdioMcpClient:
         self.timeout = timeout
         self._proc: subprocess.Popen | None = None
         self._next_id = 1
+        self._framing = "jsonl"
+        self._messages: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        self._stderr_chunks: list[bytes] = []
 
     def __enter__(self) -> "StdioMcpClient":
-        env = os.environ.copy()
-        env.update(self.server.env)
-        self._proc = subprocess.Popen(
-            [self.server.command, *self.server.args],
-            cwd=self.server.cwd or None,
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self._initialize()
-        return self
+        errors: list[str] = []
+        for framing in ("jsonl", "content_length"):
+            self._framing = framing
+            self._start_process()
+            try:
+                self._initialize()
+                return self
+            except McpError as exc:
+                errors.append(f"{framing}: {exc}")
+                self._shutdown()
+        raise McpError("MCP initialize failed (" + "; ".join(errors) + ")")
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if not self._proc:
-            return
         try:
             self._send_notification("notifications/cancelled", {"reason": "client closed"})
         except Exception:
             pass
+        self._shutdown()
+
+    def _start_process(self) -> None:
+        env = os.environ.copy()
+        env.update(self.server.env)
         try:
-            self._proc.terminate()
-            self._proc.wait(timeout=2)
+            self._proc = subprocess.Popen(
+                [self.server.command, *self.server.args],
+                cwd=self.server.cwd or None,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            raise McpError(f"Unable to start MCP server: {exc}") from exc
+        self._messages = queue.Queue()
+        self._stderr_chunks = []
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
+        self._reader_thread.start()
+        self._stderr_thread.start()
+
+    def _shutdown(self) -> None:
+        proc = self._proc
+        if not proc:
+            return
+        try:
+            if proc.stdin:
+                proc.stdin.close()
         except Exception:
-            self._proc.kill()
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        self._proc = None
 
     def list_tools(self) -> list[McpToolSpec]:
         result = self._request("tools/list", {})
@@ -95,7 +136,16 @@ class StdioMcpClient:
         self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         deadline = time.time() + self.timeout
         while time.time() < deadline:
-            message = self._read_message(deadline)
+            remaining = max(0.01, deadline - time.time())
+            try:
+                item = self._messages.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise McpError(f"MCP request timed out: {method}") from exc
+            if isinstance(item, BaseException):
+                if isinstance(item, McpError):
+                    raise item
+                raise McpError(str(item)) from item
+            message = item
             if message.get("id") != request_id:
                 continue
             if "error" in message:
@@ -112,33 +162,63 @@ class StdioMcpClient:
     def _send(self, payload: dict[str, Any]) -> None:
         proc = self._require_proc()
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        header = f"Content-Length: {len(data)}\r\n\r\n".encode("ascii")
-        proc.stdin.write(header + data)
+        if self._framing == "content_length":
+            header = f"Content-Length: {len(data)}\r\n\r\n".encode("ascii")
+            proc.stdin.write(header + data)
+        else:
+            proc.stdin.write(data + b"\n")
         proc.stdin.flush()
 
-    def _read_message(self, deadline: float) -> dict[str, Any]:
-        proc = self._require_proc()
-        header_bytes = bytearray()
-        while b"\r\n\r\n" not in header_bytes:
-            if time.time() > deadline:
-                raise McpError("MCP response timed out while reading headers")
-            chunk = proc.stdout.read(1)
+    def _reader_loop(self) -> None:
+        proc = self._proc
+        if not proc or proc.stdout is None:
+            return
+        while self._proc is proc:
+            try:
+                message = self._read_stream_message(proc.stdout)
+            except BaseException as exc:
+                self._messages.put(exc)
+                return
+            self._messages.put(message)
+
+    def _stderr_loop(self) -> None:
+        proc = self._proc
+        if not proc or proc.stderr is None:
+            return
+        while self._proc is proc:
+            chunk = proc.stderr.read(1024)
             if not chunk:
-                stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-                raise McpError(stderr.strip() or "MCP server closed stdout")
-            header_bytes.extend(chunk)
+                return
+            self._stderr_chunks.append(chunk)
+            if len(self._stderr_chunks) > 32:
+                del self._stderr_chunks[:-32]
 
-        header_text = header_bytes.decode("ascii", errors="replace")
-        content_length = 0
-        for line in header_text.splitlines():
-            if line.lower().startswith("content-length:"):
-                content_length = int(line.split(":", 1)[1].strip())
-        if content_length <= 0:
-            raise McpError("MCP response missing Content-Length")
+    def _read_stream_message(self, stream) -> dict[str, Any]:
+        first = b""
+        while not first or first in b" \t\r\n":
+            first = stream.read(1)
+            if not first:
+                raise McpError(self._stderr_text() or "MCP server closed stdout")
 
-        body = proc.stdout.read(content_length)
-        if len(body) != content_length:
-            raise McpError("MCP response body was truncated")
+        if first in {b"{", b"["}:
+            body = first + stream.readline()
+        else:
+            header_bytes = bytearray(first)
+            while b"\r\n\r\n" not in header_bytes and b"\n\n" not in header_bytes:
+                chunk = stream.read(1)
+                if not chunk:
+                    raise McpError(self._stderr_text() or "MCP server closed stdout")
+                header_bytes.extend(chunk)
+            header_text = header_bytes.decode("ascii", errors="replace")
+            content_length = 0
+            for line in header_text.splitlines():
+                if line.lower().startswith("content-length:"):
+                    content_length = int(line.split(":", 1)[1].strip())
+            if content_length <= 0:
+                raise McpError("MCP response missing Content-Length")
+            body = stream.read(content_length)
+            if len(body) != content_length:
+                raise McpError("MCP response body was truncated")
         try:
             message = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as exc:
@@ -147,12 +227,16 @@ class StdioMcpClient:
             raise McpError("Invalid MCP response type")
         return message
 
+    def _stderr_text(self) -> str:
+        return b"".join(self._stderr_chunks).decode("utf-8", errors="replace").strip()
+
     def _require_proc(self) -> subprocess.Popen:
         if not self._proc or self._proc.stdin is None or self._proc.stdout is None:
             raise McpError("MCP process is not running")
         if self._proc.poll() is not None:
-            stderr = self._proc.stderr.read().decode("utf-8", errors="replace") if self._proc.stderr else ""
-            raise McpError(stderr.strip() or f"MCP process exited with {self._proc.returncode}")
+            raise McpError(
+                self._stderr_text() or f"MCP process exited with {self._proc.returncode}"
+            )
         return self._proc
 
 

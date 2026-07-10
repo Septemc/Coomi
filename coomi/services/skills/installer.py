@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -74,10 +75,85 @@ def copy_skill_tree(source: Path, destination: Path) -> None:
     if not source.is_dir():
         raise SkillInstallError(f"Skill source is not a directory: {source}")
     find_skill_root(source)
-    if destination.exists():
-        shutil.rmtree(destination)
     ignore = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "node_modules")
-    shutil.copytree(source, destination, ignore=ignore)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
+    )
+    staging = staging_root / "skill"
+    backup = destination.parent / f".{destination.name}.backup-{uuid.uuid4().hex}"
+    moved_existing = False
+    try:
+        shutil.copytree(source, staging, ignore=ignore)
+        find_skill_root(staging)
+        if destination.exists():
+            destination.replace(backup)
+            moved_existing = True
+        try:
+            staging.replace(destination)
+        except Exception:
+            if moved_existing and backup.exists() and not destination.exists():
+                backup.replace(destination)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+    finally:
+        if staging_root.exists():
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+
+def resolve_github_commit(url: str, timeout: int = 30) -> tuple[str, bool]:
+    """Resolve the remote commit for a GitHub source.
+
+    Returns ``(commit, immutable)``. Tags and explicit commit hashes are
+    considered immutable so the marketplace doesn't repeatedly offer updates.
+    """
+    source = parse_github_url(url)
+    ref = source.ref.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{7,40}", ref):
+        return ref.lower(), True
+
+    if not ref:
+        return _ls_remote(source.clone_url, ["HEAD"], timeout)[0][0], False
+
+    patterns = [
+        f"refs/heads/{ref}",
+        f"refs/tags/{ref}^{{}}",
+        f"refs/tags/{ref}",
+    ]
+    rows = _ls_remote(source.clone_url, patterns, timeout)
+    by_ref = {remote_ref: commit for commit, remote_ref in rows}
+    branch_ref = f"refs/heads/{ref}"
+    if branch_ref in by_ref:
+        return by_ref[branch_ref], False
+    peeled_tag = f"refs/tags/{ref}^{{}}"
+    tag_ref = f"refs/tags/{ref}"
+    if peeled_tag in by_ref:
+        return by_ref[peeled_tag], True
+    if tag_ref in by_ref:
+        return by_ref[tag_ref], True
+    raise SkillInstallError(f"GitHub ref not found: {ref}")
+
+
+def _ls_remote(
+    clone_url: str, patterns: list[str], timeout: int
+) -> list[tuple[str, str]]:
+    proc = subprocess.run(
+        ["git", "ls-remote", clone_url, *patterns],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise SkillInstallError(proc.stderr.strip() or "git ls-remote failed")
+    rows: list[tuple[str, str]] = []
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) == 2:
+            rows.append((parts[0], parts[1]))
+    if not rows:
+        raise SkillInstallError("GitHub source returned no matching commit")
+    return rows
 
 
 def install_from_github(url: str, destination: Path) -> tuple[Path, GitHubSkillSource, str]:

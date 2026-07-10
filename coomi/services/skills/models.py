@@ -66,3 +66,15 @@ class SkillRecord:
     @property
     def skill_md_path(self) -> Path:
         return self.skill_path / "SKILL.md"
+
+
+@dataclass(frozen=True)
+class SkillUpdateStatus:
+    name: str
+    source_type: str
+    current_commit: str = ""
+    remote_commit: str = ""
+    update_available: bool = False
+    checked_at: str = field(default_factory=utc_now)
+    message: str = ""
+    error: str = ""

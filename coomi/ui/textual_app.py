@@ -452,9 +452,9 @@ class CoomiApp(App):
             if option == "provider_config":
                 self._open_provider_list()
             elif option == "install_skill":
-                asyncio.create_task(self._show_async_command_result(self._handle_skill_command("")))
+                self._open_skill_marketplace()
             elif option == "install_mcp":
-                asyncio.create_task(self._show_async_command_result(self._handle_mcp_command("")))
+                self._open_mcp_marketplace()
 
         self.push_screen(SettingsScreen(), on_settings_result)
 
@@ -551,6 +551,44 @@ class CoomiApp(App):
                 asyncio.create_task(self._reload_active_provider_from_config(show_message=True))
 
         self.push_screen(ProviderEditScreen(self._config_mgr, provider), on_edit_result)
+
+    def _open_skill_marketplace(self) -> None:
+        """Open the curated Skill manager from Settings."""
+        if not self._skill_manager:
+            self._show_command_result("[red]Skill manager is not initialized[/red]")
+            return
+        from .screens.skill_marketplace_screen import SkillMarketplaceScreen
+
+        self.push_screen(
+            SkillMarketplaceScreen(
+                self._skill_manager,
+                plan_mode=self._plan_mode,
+                on_changed=self._rebuild_system_prompt,
+            )
+        )
+
+    def _open_mcp_marketplace(self) -> None:
+        """Open the curated MCP manager from Settings."""
+        if not self._mcp_manager:
+            self._show_command_result("[red]MCP manager is not initialized[/red]")
+            return
+        from .screens.mcp_marketplace_screen import McpMarketplaceScreen
+
+        self.push_screen(
+            McpMarketplaceScreen(
+                self._mcp_manager,
+                plan_mode=self._plan_mode,
+                on_registry_refresh=self._refresh_mcp_registry,
+            )
+        )
+
+    async def _refresh_mcp_registry(self) -> None:
+        """Replace all live MCP adapters with the currently enabled set."""
+        if not self._tool_registry:
+            return
+        self._tool_registry.unregister_prefix("mcp__")
+        await asyncio.to_thread(self._register_mcp_tools, False)
+        await self._rebuild_system_prompt()
 
     def _execute_command(self, cmd: str) -> None:
         """执行选中的命令"""

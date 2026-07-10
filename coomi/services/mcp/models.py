@@ -21,6 +21,10 @@ class McpServerConfig:
     cwd: str = ""
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    source_type: str = "manual"
+    catalog_id: str = ""
+    catalog_signature: str = ""
+    tools_count: int = 0
     last_error: str = ""
     last_checked_at: str = ""
     created_at: str = field(default_factory=utc_now)
@@ -38,6 +42,10 @@ class McpServerConfig:
             cwd=str(data.get("cwd", "")),
             url=str(data.get("url", "")),
             headers={str(k): str(v) for k, v in data.get("headers", {}).items()},
+            source_type=str(data.get("source_type", "manual")),
+            catalog_id=str(data.get("catalog_id", "")),
+            catalog_signature=str(data.get("catalog_signature", "")),
+            tools_count=int(data.get("tools_count", 0) or 0),
             last_error=str(data.get("last_error", "")),
             last_checked_at=str(data.get("last_checked_at", "")),
             created_at=str(data.get("created_at", "")) or utc_now(),
@@ -55,6 +63,10 @@ class McpServerConfig:
             "cwd": self.cwd,
             "url": self.url,
             "headers": self.headers,
+            "source_type": self.source_type,
+            "catalog_id": self.catalog_id,
+            "catalog_signature": self.catalog_signature,
+            "tools_count": self.tools_count,
             "last_error": self.last_error,
             "last_checked_at": self.last_checked_at,
             "created_at": self.created_at,

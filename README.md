@@ -2,7 +2,7 @@
 
 一个比较纯净的 AI Agent项目。基于CLI的自主 Agent，能读取文件、编辑代码、执行命令、管理任务。
 
-![1780235212332](image/README/1780235212332.png)
+![Coomi Agent 终端界面](https://raw.githubusercontent.com/Septemc/Coomi/main/image/README/1780235212332.png)
 
 ## 特性
 
@@ -11,6 +11,22 @@
 - **可切换的 LLM Provider** — 支持 DeepSeek、OpenAI、Anthropic 和兼容 OpenAI API 的通用服务。
 - **上下文与记忆机制** — 提供上下文压缩、记忆管理、语义召回和工具结果缓存等基础工程能力。
 - **流式终端界面** — 基于 Textual 的 TUI，支持流式输出、工具调用提示和状态信息展示。
+- **精选扩展中心** — 在终端内浏览、安装、更新和卸载精选 Skill，并配置和测试热门 MCP Server。
+
+## Skill 与 MCP 管理中心
+
+在主界面按 `F3` 打开 Settings，然后选择“管理 Skill”或“管理 MCP”。管理页面完全支持键盘操作：
+
+| 按键 | 行为 |
+| --- | --- |
+| `↑` / `↓` | 移动选中项，支持首尾循环 |
+| `Enter` | 安装；已安装时检查更新；发现更新后应用更新；MCP 中用于配置或测试并刷新工具 |
+| `Delete` | 进入卸载/移除确认，再次按 `Delete` 或 `Enter` 确认 |
+| `Esc` | 取消确认或返回 |
+
+精选目录只随安装包保存名称、说明和经过验证的上游来源，不会把第三方 Skill/MCP 内容复制进 Coomi。安装前请检查页面显示的来源、许可证和运行要求。第三方扩展可能执行代码或访问外部服务，应仅安装信任的来源并使用最小权限。
+
+部分 MCP 需要额外运行环境或凭据，例如 Node.js、`npx`、Python、`uvx`、Docker、API Token、允许访问的目录或数据库连接地址。Coomi 会在安装前要求填写必需配置；秘密值不会在列表中明文显示，但会保存在本机 `~/.coomi/config/mcp_servers.json`，请保护该文件。
 
 ## 快速开始
 

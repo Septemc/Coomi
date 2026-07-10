@@ -10,8 +10,8 @@ from textual.widgets import Static
 
 SETTINGS_OPTIONS = [
     ("provider_config", "新增/修改模型API配置", "管理 LLM Provider"),
-    ("install_skill", "管理 Skill", "/skill list/install/enable/disable"),
-    ("install_mcp", "管理 MCP", "/mcp list/add stdio|http|sse/test/tools"),
+    ("install_skill", "管理 Skill", "精选目录、安装、更新、卸载"),
+    ("install_mcp", "管理 MCP", "精选目录、配置、测试、移除"),
 ]
 
 SETTINGS_GUIDE = {
@@ -28,6 +28,7 @@ SETTINGS_GUIDE = {
     "install_skill": (
         "[bold cyan]当前选中：Skill[/bold cyan]\n"
         "Skill 是可安装、可启用/停用的能力说明包。Coomi 会在相关任务中读取已启用 Skill 的 SKILL.md，把专业流程注入上下文。\n\n"
+        "按 Enter 打开精选管理中心：↑↓ 选择；Enter 安装、检查更新或应用更新；Delete 确认卸载；Esc 返回。\n\n"
         "[bold]常用命令[/bold]\n"
         "/skill list 查看已安装 Skill\n"
         "/skill install C:\\path\\my-skill 安装本地 Skill 目录，目录内需要 SKILL.md\n"
@@ -39,6 +40,7 @@ SETTINGS_GUIDE = {
     "install_mcp": (
         "[bold cyan]当前选中：MCP[/bold cyan]\n"
         "MCP 用来接入外部工具服务器。启用成功后，服务器暴露的工具会注册成 mcp__server__tool 格式，Agent 可以像普通工具一样调用。\n\n"
+        "按 Enter 打开精选管理中心：↑↓ 选择；Enter 配置或测试并刷新工具；Delete 确认移除；Esc 返回。需要 Token、目录或数据库地址的项目会先显示配置表单。\n\n"
         "[bold]常用命令[/bold]\n"
         "/mcp list 查看服务器\n"
         "/mcp add files stdio npx -y @modelcontextprotocol/server-filesystem F:\\Work 添加 stdio 服务器\n"
