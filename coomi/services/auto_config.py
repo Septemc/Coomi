@@ -542,6 +542,7 @@ def _looks_like_local_skill_path(value: str) -> bool:
     stripped = value.strip().strip('"')
     return bool(
         re.match(r"^[A-Za-z]:[\\/].+", stripped)
+        or Path(stripped).expanduser().is_absolute()
         or stripped.startswith("./")
         or stripped.startswith("../")
         or stripped.startswith("~/")

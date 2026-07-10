@@ -25,6 +25,30 @@ from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
 from coomi.ui.widgets.welcome_panel import WelcomePanel
+from coomi.services.llm.config import ProviderConfig
+
+
+class UiTestProvider:
+    def __init__(self) -> None:
+        self.model = "test-model"
+        self.config = ProviderConfig(
+            id="test",
+            type="generic",
+            display="Test Model",
+            api_key="test-key",
+            model=self.model,
+        )
+
+    def get_model_display_name(self) -> str:
+        return "Test Model"
+
+
+@pytest.fixture(autouse=True)
+def _use_test_provider(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "coomi.ui.textual_app.get_llm_provider",
+        lambda provider_id=None: UiTestProvider(),
+    )
 
 
 class SelectionTestApp(App):
