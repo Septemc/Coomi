@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import signal
+
 import pytest
 
+from coomi.cli import _guard_ctrl_c
 from coomi.cli import _is_mouse_enabled
 
 
@@ -27,3 +30,14 @@ def test_mouse_tracking_can_be_disabled_explicitly(
     monkeypatch.setenv("COOMI_MOUSE", value)
 
     assert _is_mouse_enabled() is False
+
+
+def test_ctrl_c_guard_swallows_sigint_and_restores_previous_handler():
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    with _guard_ctrl_c():
+        guarded_handler = signal.getsignal(signal.SIGINT)
+        assert callable(guarded_handler)
+        signal.raise_signal(signal.SIGINT)
+
+    assert signal.getsignal(signal.SIGINT) is previous_handler

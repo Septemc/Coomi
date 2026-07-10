@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from rich.console import Console
 from rich.segment import Segment
@@ -161,6 +163,19 @@ async def test_coomi_app_ctrl_c_copies_log_highlight():
         await pilot.pause()
 
         assert app.clipboard == "hello"
+
+
+@pytest.mark.asyncio
+async def test_coomi_app_ctrl_c_without_selection_never_exits():
+    app = CoomiApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        with patch.object(app, "exit") as exit_mock:
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+
+        exit_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
