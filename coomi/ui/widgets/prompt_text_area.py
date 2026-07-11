@@ -42,7 +42,11 @@ class PromptTextArea(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         """重写 _on_key — 在 TextArea 原生处理之前拦截 Enter"""
-        if event.key == "enter":
+        if event.key in {"shift+enter", "ctrl+enter"}:
+            event.stop()
+            event.prevent_default()
+            self.action_insert_newline()
+        elif event.key == "enter":
             # Enter → 提交（Ctrl+Enter 由 BINDINGS 处理，不会到达这里）
             event.stop()
             event.prevent_default()

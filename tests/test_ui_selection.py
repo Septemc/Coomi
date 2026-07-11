@@ -190,6 +190,24 @@ async def test_coomi_app_ctrl_c_copies_log_highlight():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["shift+enter", "ctrl+enter"])
+async def test_coomi_app_modified_enter_inserts_newline_without_submitting(key: str):
+    app = CoomiApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        prompt = app.screen.query_one("#prompt-input", PromptTextArea)
+        prompt.text = "first line"
+        prompt.move_cursor(prompt.document.end)
+        prompt.focus()
+
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert prompt.text == "first line\n"
+        assert app._agent_running is False
+
+
+@pytest.mark.asyncio
 async def test_coomi_app_ctrl_c_without_selection_never_exits():
     app = CoomiApp()
     async with app.run_test(size=(100, 30)) as pilot:

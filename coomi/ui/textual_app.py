@@ -258,6 +258,8 @@ class CoomiApp(App):
         Binding("left", "question_left", "←", priority=True),
         Binding("right", "question_right", "→", priority=True),
         Binding("space", "question_toggle", "Toggle", priority=True),
+        Binding("shift+enter", "insert_prompt_newline", "Newline", priority=True, show=False),
+        Binding("ctrl+enter", "insert_prompt_newline", "Newline", priority=True, show=False),
         Binding("enter", "question_confirm", "Confirm", priority=True),
         Binding("escape", "question_cancel_or_exit", "Cancel/Exit", priority=True),
     ]
@@ -1381,6 +1383,12 @@ class CoomiApp(App):
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         """条件路由：统一基于 _interactive_mode 拦截 keys，否则放行给 TextArea"""
+        if action == "insert_prompt_newline":
+            try:
+                prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+            except Exception:
+                return False
+            return self.focused is prompt and not prompt.disabled
         question_actions = {
             "question_up", "question_down", "question_left",
             "question_right", "question_toggle", "question_confirm",
@@ -1463,6 +1471,15 @@ class CoomiApp(App):
     async def action_question_toggle(self) -> None:
         if self._interactive_mode == "question" and self._plan_panel:
             self._plan_panel.toggle_current_option()
+
+    def action_insert_prompt_newline(self) -> None:
+        """Insert a newline in the main prompt without submitting it."""
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+        except Exception:
+            return
+        if self.focused is prompt and not prompt.disabled:
+            prompt.action_insert_newline()
 
     async def action_question_left(self) -> None:
         if self._interactive_mode == "question" and self._plan_panel:
