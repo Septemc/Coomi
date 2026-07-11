@@ -57,11 +57,15 @@ PROVIDER_TEMPLATES = {
 def _load_dotenv() -> dict[str, str]:
     """加载 .env 文件（如果存在）"""
     env_path = Path.cwd() / ".env"
-    env_vars = {}
+    env_vars: dict[str, str] = {}
     if env_path.exists():
         try:
             from dotenv import dotenv_values
-            env_vars = dotenv_values(env_path)
+            env_vars = {
+                str(key): str(value)
+                for key, value in dotenv_values(env_path).items()
+                if value is not None
+            }
         except ImportError:
             pass
     return env_vars

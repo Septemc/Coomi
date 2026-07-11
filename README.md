@@ -21,6 +21,9 @@
 只有出现“正在调用”和“调用成功”才表示 MCP 工具真实执行。可使用 `/skill deactivate all` 和
 `/mcp deactivate all` 清除当前会话状态。
 
+也可以让 Coomi 联网检索合适的 Skill 或 MCP。推荐结果会附带适配 Coomi 的安装内容：Skill 使用可验证的
+GitHub 地址或本地目录；MCP 使用完整 JSON、服务 URL 或 `/mcp add` 命令，并说明依赖、环境变量、权限和验证方式。
+
 在主界面按 `F3` 打开 Settings，然后选择“管理 Skill”或“管理 MCP”。管理页面完全支持键盘操作：
 
 | 按键 | 行为 |

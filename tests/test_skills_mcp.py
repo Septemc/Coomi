@@ -270,3 +270,18 @@ def test_session_extension_state_round_trip(tmp_path: Path) -> None:
     loaded = load_session_from_jsonl(session.history_path)
     assert loaded.active_skills == ["frontend-design"]
     assert loaded.selected_mcps == ["memory"]
+
+
+def test_complete_extension_commands_are_submittable() -> None:
+    assert CoomiApp._is_complete_extension_command("/skill frontend-design 测试")
+    assert CoomiApp._is_complete_extension_command("/mcp memory 查询信息 项目名称")
+    assert not CoomiApp._is_complete_extension_command("/skill frontend-design")
+    assert not CoomiApp._is_complete_extension_command("/mcp memory")
+
+
+@pytest.mark.asyncio
+async def test_online_extension_discovery_includes_coomi_install_guidance() -> None:
+    prompt = await build_system_prompt(current_context="请联网检索适合 Coomi 的 skills 和 MCP")
+    assert "Skill and MCP Discovery" in prompt
+    assert "Coomi-compatible installation method" in prompt
+    assert "/mcp add <name> stdio" in prompt

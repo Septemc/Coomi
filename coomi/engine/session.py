@@ -287,6 +287,18 @@ async def build_system_prompt(
             "weather forecasts, news, latest events, prices, and other time-sensitive facts."
         )
 
+    if _requests_extension_discovery(current_context):
+        dynamic_parts.append(
+            "## Skill and MCP Discovery\n"
+            "The user wants you to search online for Skills or MCP servers. Search the web and "
+            "recommend only sources that can be verified. For every recommendation, provide a "
+            "Coomi-compatible installation method: a GitHub Skill URL or local directory for "
+            "Skills, and a complete MCP JSON, MCP URL, or `/mcp add <name> stdio <command> "
+            "[args...]` command for MCP servers. Include runtime requirements, required environment "
+            "variables, permissions, and a short verification command. Never invent a repository, "
+            "package, command, or URL."
+        )
+
     if skill_manager:
         skill_context = skill_manager.build_prompt_context(current_context, active_skills)
         if skill_context:
@@ -362,3 +374,13 @@ def _requires_web_search_context(context: str) -> bool:
         "price",
     )
     return any(term in lowered for term in terms)
+
+
+def _requests_extension_discovery(context: str) -> bool:
+    lowered = context.casefold()
+    extension = any(term in lowered for term in ("skill", "skills", "mcp"))
+    discovery = any(
+        term in lowered
+        for term in ("联网", "搜索", "检索", "查找", "推荐", "search", "find", "recommend")
+    )
+    return extension and discovery

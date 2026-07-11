@@ -1507,6 +1507,13 @@ class CoomiApp(App):
 
         # 指令模式 → 执行选中指令
         if self._interactive_mode == "command" and self._command_list:
+            current_text = self._get_prompt_text().strip()
+            if self._is_complete_extension_command(current_text):
+                self._hide_command_list()
+                self._clear_prompt()
+                self._ensure_new_session_for_welcome_input()
+                asyncio.create_task(self._run_agent_async(current_text))
+                return
             item = self._command_list.get_selected_item()
             if item:
                 cmd, _desc, kind = item
@@ -1692,6 +1699,13 @@ class CoomiApp(App):
         if server_name.casefold() == "memory":
             return [("保存信息", "保存长期信息"), ("查询信息", "查询已保存的信息"), ("查看已有信息", "列出已有信息")]
         return [("执行任务", "描述希望该 MCP 完成的具体任务")]
+
+    @staticmethod
+    def _is_complete_extension_command(text: str) -> bool:
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3 or parts[0].casefold() not in {"/skill", "/mcp"}:
+            return False
+        return bool(parts[1].strip() and parts[2].strip())
 
     def _hide_command_list(self) -> None:
         if self._command_list:

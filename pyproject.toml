@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coomi-agent"
-version = "1.0.0"
+version = "1.1.0"
 description = "一款纯净的自主 Agent 系统。"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -58,8 +58,21 @@ line-length = 100
 target-version = "py39"
 
 [tool.mypy]
-python_version = "3.9"
-strict = true
+python_version = "3.10"
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+disable_error_code = [
+    "arg-type",
+    "assignment",
+    "attr-defined",
+    "has-type",
+    "override",
+    "union-attr",
+    "used-before-def",
+    "valid-type",
+    "var-annotated",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

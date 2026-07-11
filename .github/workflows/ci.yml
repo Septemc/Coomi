@@ -31,6 +31,9 @@ jobs:
       - name: Ruff check
         run: ruff check .
 
+      - name: MyPy check
+        run: mypy coomi
+
       - name: Compile check
         run: python -m py_compile coomi/engine/loop.py && python -m py_compile coomi/engine/loop_runner.py && python -m py_compile coomi/ui/textual_app.py
 
