@@ -1,4 +1,4 @@
-"""PromptTextArea — 自定义 TextArea，Enter 发送，Shift/Ctrl+Enter 换行
+"""PromptTextArea — 自定义 TextArea，Enter 发送，Shift/Ctrl+Enter/Ctrl+J 换行
 
 重写 _on_key 拦截 Enter，在 TextArea 原生处理之前处理：
 - Enter → 提交（post Submitted message）
@@ -28,6 +28,7 @@ class PromptTextArea(TextArea):
     BINDINGS = [
         Binding("ctrl+enter", "insert_newline", "Insert Newline", show=False),
         Binding("shift+enter", "insert_newline", "Insert Newline", show=False),
+        Binding("ctrl+j", "insert_newline", "Insert Newline", show=False),
         Binding("ctrl+a", "select_all", "Select All", show=False),
         Binding("ctrl+c", "copy", "Copy", show=False),
         Binding("ctrl+v", "paste", "Paste", show=False),
@@ -42,7 +43,7 @@ class PromptTextArea(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         """重写 _on_key — 在 TextArea 原生处理之前拦截 Enter"""
-        if event.key in {"shift+enter", "ctrl+enter"}:
+        if event.key in {"shift+enter", "ctrl+enter", "ctrl+j"}:
             event.stop()
             event.prevent_default()
             self.action_insert_newline()

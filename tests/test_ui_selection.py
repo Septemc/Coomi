@@ -25,6 +25,7 @@ from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
 from coomi.ui.widgets.welcome_panel import WelcomePanel
+from coomi.ui.terminal_capabilities import supports_modified_enter
 from coomi.services.llm.config import ProviderConfig
 
 
@@ -190,7 +191,7 @@ async def test_coomi_app_ctrl_c_copies_log_highlight():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["shift+enter", "ctrl+enter"])
+@pytest.mark.parametrize("key", ["shift+enter", "ctrl+enter", "ctrl+j"])
 async def test_coomi_app_modified_enter_inserts_newline_without_submitting(key: str):
     app = CoomiApp()
     async with app.run_test(size=(100, 30)) as pilot:
@@ -205,6 +206,20 @@ async def test_coomi_app_modified_enter_inserts_newline_without_submitting(key: 
 
         assert prompt.text == "first line\n"
         assert app._agent_running is False
+
+
+def test_modified_enter_detection_is_conservative_and_overridable():
+    assert supports_modified_enter({}) is False
+    assert supports_modified_enter({"WT_SESSION": "demo"}) is False
+    assert supports_modified_enter({"KITTY_WINDOW_ID": "1"}) is True
+    assert supports_modified_enter({"TERM_PROGRAM": "ghostty"}) is True
+    assert supports_modified_enter({"COOMI_MODIFIED_ENTER": "1"}) is True
+    assert supports_modified_enter({"COOMI_MODIFIED_ENTER": "0", "KITTY_WINDOW_ID": "1"}) is False
+
+
+def test_prompt_placeholder_advertises_reliable_multiline_fallback():
+    assert "Enter 发送" in PROMPT_PLACEHOLDER
+    assert "Shift+Enter / Ctrl+J 换行" in PROMPT_PLACEHOLDER
 
 
 @pytest.mark.asyncio

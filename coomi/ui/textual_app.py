@@ -78,6 +78,7 @@ from .widgets.tool_call_banner import ToolCallBanner
 from .widgets.prompt_text_area import PromptTextArea
 from .screens.main_screen import PROMPT_PLACEHOLDER, MainScreen
 from .screens.command_palette import CommandPalette
+from .terminal_capabilities import supports_modified_enter
 
 SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -260,6 +261,7 @@ class CoomiApp(App):
         Binding("space", "question_toggle", "Toggle", priority=True),
         Binding("shift+enter", "insert_prompt_newline", "Newline", priority=True, show=False),
         Binding("ctrl+enter", "insert_prompt_newline", "Newline", priority=True, show=False),
+        Binding("ctrl+j", "insert_prompt_newline", "Newline", priority=True, show=False),
         Binding("enter", "question_confirm", "Confirm", priority=True),
         Binding("escape", "question_cancel_or_exit", "Cancel/Exit", priority=True),
     ]
@@ -421,7 +423,18 @@ class CoomiApp(App):
 
         # Wait for screen to be ready before querying widgets
         self.call_after_refresh(self._show_welcome_message)
+        self.call_after_refresh(self._show_multiline_key_hint)
         self.call_after_refresh(self._start_update_check)
+
+    def _show_multiline_key_hint(self) -> None:
+        """Warn when Shift+Enter support cannot be established at startup."""
+        if not supports_modified_enter():
+            self.notify(
+                "当前终端可能无法区分 Shift+Enter；请使用 Ctrl+J 换行。",
+                title="多行输入",
+                severity="warning",
+                timeout=8,
+            )
 
     # -- command palette ---------------------------------------------------
 

@@ -22,7 +22,7 @@ from ..widgets.streaming_preview import StreamingPreview
 from ..widgets.welcome_panel import WelcomePanel
 
 
-PROMPT_PLACEHOLDER = '输入消息（Enter发送，Shift+Enter换行，输入“/”查看指令，双Esc退出）'
+PROMPT_PLACEHOLDER = '输入消息（Enter 发送 · Shift+Enter / Ctrl+J 换行 · “/”查看指令 · 双 Esc 退出）'
 
 
 class MainScreen(Screen):
@@ -62,7 +62,7 @@ class MainScreen(Screen):
         yield StatusPanel(self._status_line, id="status-panel")
         yield PromptTextArea(
             id="prompt-input",
-            placeholder='输入消息（Enter发送，Shift+Enter换行，输入"/"查看指令，双Esc退出）',
+            placeholder=PROMPT_PLACEHOLDER,
         )
 
     def on_mount(self) -> None:
