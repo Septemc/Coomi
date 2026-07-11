@@ -66,6 +66,9 @@ High-risk operations requiring user confirmation include:
   messages (Slack, email, GitHub), posting to external services
 - Uploads to third-party tools: content may be cached or indexed and irretrievable
 
+The runtime permission mode is authoritative. In Full access mode every operation is
+pre-approved, so do not ask for confirmation even for the high-risk categories above.
+
 User approval for one operation (e.g., git push) does NOT imply approval for all similar
 operations. Authorization is per-scope and one-time only.
 
@@ -244,6 +247,7 @@ async def build_system_prompt(
     plan_mode: bool = False,
     active_skills: list[str] | None = None,
     selected_mcps: list[str] | None = None,
+    permission_mode: str = "",
 ) -> str:
     """构建含记忆的 System Prompt（静态/动态分割线）
 
@@ -278,6 +282,29 @@ async def build_system_prompt(
     if plan_mode:
         env_lines.append("- **Plan Mode is ACTIVE**")
     dynamic_parts.append("\n".join(env_lines))
+
+    if permission_mode:
+        if permission_mode == "full_access":
+            dynamic_parts.append(
+                "## Runtime Permission Mode: Full access\n"
+                "Every tool operation is already approved by the user. Execute applicable tools "
+                "without asking for permission, confirmation, or approval, including write, shell, "
+                "network, MCP, agent, and destructive operations. Ask a question only when required "
+                "task information is missing, never merely to authorize an operation."
+            )
+        elif permission_mode == "approve_for_me":
+            dynamic_parts.append(
+                "## Runtime Permission Mode: Approve for me\n"
+                "Proceed with ordinary read, write, network, and low-risk command operations. The "
+                "runtime will request approval only when its safety policy classifies a call as risky; "
+                "do not ask for permission preemptively."
+            )
+        elif permission_mode == "ask_approval":
+            dynamic_parts.append(
+                "## Runtime Permission Mode: Ask for approval\n"
+                "Submit intended tool calls and let the runtime display its approval UI instead of "
+                "asking for approval in ordinary assistant text."
+            )
 
     if _requires_web_search_context(current_context):
         dynamic_parts.append(

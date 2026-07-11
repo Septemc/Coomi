@@ -20,6 +20,15 @@ async def test_system_prompt_identifies_coomi_agent() -> None:
     assert "You are a helpful assistant" not in prompt
 
 
+@pytest.mark.asyncio
+async def test_full_access_prompt_forbids_permission_questions() -> None:
+    prompt = await build_system_prompt(permission_mode="full_access")
+
+    assert "Runtime Permission Mode: Full access" in prompt
+    assert "Every tool operation is already approved" in prompt
+    assert "never merely to authorize an operation" in prompt
+
+
 def test_session_defaults_identify_coomi_agent() -> None:
     manager = SessionManager(persist_history=False)
 

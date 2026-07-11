@@ -38,6 +38,9 @@ GitHub 地址或本地目录；MCP 使用完整 JSON、服务 URL 或 `/mcp add`
 
 部分 MCP 需要额外运行环境或凭据，例如 Node.js、`npx`、Python、`uvx`、Docker、API Token、允许访问的目录或数据库连接地址。Coomi 会在安装前要求填写必需配置；秘密值不会在列表中明文显示，但会保存在本机 `~/.coomi/config/mcp_servers.json`，请保护该文件。
 
+权限模式严格遵循以下语义：`Ask for approval` 在工具执行前询问；`Approve for me` 自动批准普通操作，仅对风险操作询问；
+`Full access` 将所有原生、文本回退、MCP、Agent、网络、写入和命令操作视为已批准，不显示权限确认。
+
 ## 快速开始
 
 ### 环境要求

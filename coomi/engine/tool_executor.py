@@ -247,9 +247,12 @@ class ToolExecutor:
         arguments: dict[str, Any],
         source: str = "native",
     ) -> tuple[bool, str | None]:
-        level = self.permission_system.check_permission(tool.name, arguments)
-        if source == "text_fallback" and tool.access in {ToolAccess.WRITE, ToolAccess.DESTRUCTIVE}:
-            level = PermissionLevel.ASK
+        level = self.permission_system.check_execution_permission(
+            tool.name,
+            arguments,
+            source=source,
+            mutates_state=tool.access in {ToolAccess.WRITE, ToolAccess.DESTRUCTIVE},
+        )
         if level == PermissionLevel.AUTO:
             return True, None
         if level == PermissionLevel.DENY:

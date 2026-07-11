@@ -87,6 +87,27 @@ class PermissionSystem:
     def get_mode_description(self) -> str:
         return PERMISSION_MODE_DESCRIPTIONS[self._mode]
 
+    @property
+    def is_full_access(self) -> bool:
+        """Full access is an unconditional runtime approval policy."""
+        return self._mode == PermissionMode.FULL_ACCESS
+
+    def check_execution_permission(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        source: str = "native",
+        mutates_state: bool = False,
+    ) -> PermissionLevel:
+        """Return the final permission after mode and call-source policy are applied."""
+        if self.is_full_access:
+            return PermissionLevel.AUTO
+        level = self.check_permission(tool_name, arguments)
+        if source == "text_fallback" and mutates_state and level == PermissionLevel.AUTO:
+            return PermissionLevel.ASK
+        return level
+
     def check_permission(self, tool_name: str, arguments: dict[str, Any]) -> PermissionLevel:
         """检查工具执行权限"""
         if self._mode == PermissionMode.FULL_ACCESS:
@@ -120,6 +141,10 @@ class PermissionSystem:
             "WebSearch",
             "Write",
             "Edit",
+            "Config",
+            "TodoWrite",
+            "EnterPlanMode",
+            "ExitPlanMode",
             "AskUserQuestion",
         }:
             return PermissionLevel.AUTO

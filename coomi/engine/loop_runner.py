@@ -146,6 +146,7 @@ class LoopRunner:
             current_context=_build_spec_context(spec),
             cwd=cwd,
             model_display=display_name,
+            permission_mode=self.permission_system.mode.value,
         )
         system_prompt += LOOP_SYSTEM_PROMPT_EXTRA
 

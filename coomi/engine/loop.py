@@ -18,7 +18,7 @@ from ..security import HookSystem, PermissionLevel, PermissionSystem
 from ..services.context.compressor import ContextCompressor
 from ..services.llm.provider import LLMProvider
 from ..services.llm.text_tool_calls import TextToolCallFilter, is_likely_text_tool_call
-from ..tools.base import ToolConcurrency
+from ..tools.base import ToolAccess, ToolConcurrency
 from ..tools.registry import ToolRegistry
 from ..types import ToolCall
 from ..ui.events import (
@@ -324,7 +324,12 @@ class AgentLoop:
             return False
         if tool.concurrency != ToolConcurrency.PARALLEL:
             return False
-        permission = self.permission_system.check_permission(tool.name, tool_call.arguments)
+        permission = self.permission_system.check_execution_permission(
+            tool.name,
+            tool_call.arguments,
+            source=tool_call.source,
+            mutates_state=tool.access in {ToolAccess.WRITE, ToolAccess.DESTRUCTIVE},
+        )
         return permission == PermissionLevel.AUTO
 
     def _canonical_tool_name(self, name: str) -> str:

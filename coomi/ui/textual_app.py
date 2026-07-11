@@ -409,6 +409,7 @@ class CoomiApp(App):
             current_context="",
             cwd=self._cwd,
             model_display=self._display_name,
+            permission_mode=self._permission_system.mode.value,
         )
         self._session = self._session_mgr.create_session(
             system_prompt=system_prompt,
@@ -790,6 +791,7 @@ class CoomiApp(App):
             f"{self._permission_system.get_mode_label()}\n"
             f"[dim]{self._permission_system.get_mode_description()}[/dim]"
         )
+        asyncio.create_task(self._rebuild_system_prompt())
 
     def _show_permission_mode(self) -> None:
         self._show_command_result(
@@ -1327,6 +1329,7 @@ class CoomiApp(App):
             cwd=self._cwd,
             model_display=self._display_name,
             plan_mode=self._plan_mode,
+            permission_mode=self._permission_system.mode.value,
         )
 
     async def _handle_compact_command(self) -> None:
@@ -2085,6 +2088,7 @@ class CoomiApp(App):
             current_context="",
             cwd=self._cwd,
             model_display=self._display_name,
+            permission_mode=self._permission_system.mode.value,
         )
         self._session = self._session_mgr.create_session(
             system_prompt=system_prompt,
@@ -2194,6 +2198,7 @@ class CoomiApp(App):
                     plan_mode=self._plan_mode,
                     active_skills=self._session.active_skills,
                     selected_mcps=self._session.selected_mcps,
+                    permission_mode=self._permission_system.mode.value,
                 )
                 for skill_name in self._session.active_skills:
                     skill = self._skill_manager.get(skill_name) if self._skill_manager else None

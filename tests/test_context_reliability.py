@@ -1510,7 +1510,7 @@ async def test_task_text_tool_calls_execute_to_agent_alias(tmp_path: Path, raw: 
     assert outcome.tool_call.name == "Agent"
     assert outcome.is_error
     assert "Tool 'Task' not found" not in outcome.result_text
-    assert "Permission required" in outcome.result_text
+    assert "Permission required" not in outcome.result_text
 
 
 def test_text_tool_call_filter_turns_malformed_calls_into_correction():
@@ -2211,7 +2211,7 @@ async def test_non_plan_full_access_write_still_executes(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_forces_ask_for_text_fallback_write_even_full_access(tmp_path: Path):
+async def test_tool_executor_full_access_approves_text_fallback_write(tmp_path: Path):
     registry = ToolRegistry()
     tool = WriteCountingTool()
     registry.register(tool)
@@ -2234,9 +2234,9 @@ async def test_tool_executor_forces_ask_for_text_fallback_write_even_full_access
         ),
     )
 
-    assert outcome.is_error
-    assert "Permission required" in outcome.result_text
-    assert tool.calls == 0
+    assert not outcome.is_error
+    assert "Permission required" not in outcome.result_text
+    assert tool.calls == 1
 
 
 @pytest.mark.asyncio
@@ -2289,7 +2289,7 @@ async def test_tool_executor_resolves_task_alias_to_agent(tmp_path: Path):
         (AgentTool(), {"description": "Inspect aliases"}),
     ],
 )
-async def test_tool_executor_forces_ask_for_text_fallback_write_access_tools(
+async def test_tool_executor_full_access_never_prompts_for_text_fallback_tools(
     tmp_path: Path,
     tool: BaseTool,
     arguments: dict[str, Any],
@@ -2315,8 +2315,7 @@ async def test_tool_executor_forces_ask_for_text_fallback_write_access_tools(
         ),
     )
 
-    assert outcome.is_error
-    assert "Permission required" in outcome.result_text
+    assert "Permission required" not in outcome.result_text
 
 
 @pytest.mark.asyncio
@@ -2437,11 +2436,18 @@ def test_permission_modes_change_tool_policy():
     permissions.set_mode(PermissionMode.APPROVE_FOR_ME)
     assert permissions.check_permission("AskUserQuestion", {"questions": []}) == PermissionLevel.AUTO
     assert permissions.check_permission("Write", {"file_path": "x"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("Config", {"setting": "model"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("TodoWrite", {"todos": []}) == PermissionLevel.AUTO
     assert permissions.check_permission("Bash", {"command": "python -m pytest"}) == PermissionLevel.AUTO
     assert permissions.check_permission("Bash", {"command": "rm -rf /"}) == PermissionLevel.ASK
 
     permissions.set_mode(PermissionMode.FULL_ACCESS)
     assert permissions.check_permission("Bash", {"command": "rm -rf /"}) == PermissionLevel.AUTO
+    assert permissions.check_permission("unknown_tool", {}) == PermissionLevel.AUTO
+    assert permissions.check_permission("mcp__server__dangerous", {}) == PermissionLevel.AUTO
+    assert permissions.check_execution_permission(
+        "Write", {}, source="text_fallback", mutates_state=True
+    ) == PermissionLevel.AUTO
 
 
 def test_thinking_tags_are_removed_from_visible_generic_content():
