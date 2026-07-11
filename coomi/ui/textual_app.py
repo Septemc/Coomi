@@ -30,7 +30,7 @@ from .widgets.custom_header import CustomHeader
 
 from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
-from ..services.session_history import list_session_records, load_session_from_jsonl
+from ..services.session_history import append_session_state, list_session_records, load_session_from_jsonl
 from ..services.llm.factory import get_config_manager
 from ..services.update_check import build_update_prompt_suffix, check_for_update
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
@@ -290,6 +290,7 @@ class CoomiApp(App):
         self._tool_start_time: float = 0.0
         self._pending_tool_name: str = ""
         self._pending_tool_args: str = ""
+        self._mcp_called_this_turn: set[str] = set()
         self._input_intent_detector = InputIntentDetector()
 
         # Exit state
@@ -1506,10 +1507,20 @@ class CoomiApp(App):
 
         # 指令模式 → 执行选中指令
         if self._interactive_mode == "command" and self._command_list:
-            cmd = self._command_list.get_selected_command()
-            self._hide_command_list()
-            self._clear_prompt()
-            if cmd:
+            item = self._command_list.get_selected_item()
+            if item:
+                cmd, _desc, kind = item
+                if kind in {"skill", "mcp", "mcp_action"}:
+                    prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+                    prompt.text = cmd + " "
+                    prompt.move_cursor(prompt.document.end)
+                    if kind == "mcp":
+                        self._command_list.set_filter(cmd + " ")
+                    else:
+                        self._hide_command_list()
+                    return
+                self._hide_command_list()
+                self._clear_prompt()
                 self._execute_command(cmd)
             return
 
@@ -1650,7 +1661,8 @@ class CoomiApp(App):
 
     async def _show_command_list(self) -> None:
         from .widgets.command_list import CommandList
-        self._command_list = CommandList()
+        commands = self._extension_commands()
+        self._command_list = CommandList(commands=commands)
         try:
             log = self.screen.query_one("#message-log", RichLog)
             await self.screen.mount(self._command_list, before=log)
@@ -1658,6 +1670,28 @@ class CoomiApp(App):
             self._focus_prompt_input()
         except Exception:
             pass
+
+    def _extension_commands(self) -> list[tuple[str, str, str]]:
+        from .widgets.command_list import COMMANDS
+        commands = [(cmd, desc, "command") for cmd, desc in COMMANDS]
+        if self._skill_manager:
+            for skill in self._skill_manager.list(enabled_only=True):
+                commands.append((f"/skill {skill.name}", skill.description or "激活专业工作方法", "skill"))
+        if self._mcp_manager:
+            for server in self._mcp_manager.list(enabled_only=True):
+                if server.last_error:
+                    continue
+                base = f"/mcp {server.name}"
+                commands.append((base, f"选择 MCP（{server.tools_count} 个工具）", "mcp"))
+                for action, desc in self._mcp_actions(server.name):
+                    commands.append((f"{base} {action}", desc, "mcp_action"))
+        return commands
+
+    @staticmethod
+    def _mcp_actions(server_name: str) -> list[tuple[str, str]]:
+        if server_name.casefold() == "memory":
+            return [("保存信息", "保存长期信息"), ("查询信息", "查询已保存的信息"), ("查看已有信息", "列出已有信息")]
+        return [("执行任务", "描述希望该 MCP 完成的具体任务")]
 
     def _hide_command_list(self) -> None:
         if self._command_list:
@@ -1932,7 +1966,80 @@ class CoomiApp(App):
 
     async def _run_agent_async(self, user_input: str) -> None:
         """异步执行 agent"""
-        self._run_agent(user_input)
+        prepared = self._prepare_extension_request(user_input)
+        if prepared is None:
+            return
+        self._run_agent(prepared)
+
+    def _prepare_extension_request(self, user_input: str) -> str | None:
+        """Parse user-facing extension commands and update conversation state."""
+        text = user_input.strip()
+        if not self._session:
+            return text
+        parts = text.split(maxsplit=2)
+        if parts and parts[0].casefold() == "/skill" and len(parts) >= 2:
+            name = parts[1]
+            if name.casefold() == "deactivate":
+                target = parts[2].strip() if len(parts) == 3 else ""
+                if not target:
+                    self._show_command_result("[yellow]用法：/skill deactivate <name|all>[/yellow]")
+                    return None
+                self._session.active_skills = [] if target.casefold() == "all" else [
+                    item for item in self._session.active_skills if item.casefold() != target.casefold()
+                ]
+                append_session_state(self._session)
+                self._show_command_result(f"[green]Skill {target} 已取消激活[/green]")
+                return None
+            if name.casefold() not in {"list", "install", "enable", "disable", "remove", "update", "info"}:
+                skill = self._skill_manager.get(name) if self._skill_manager else None
+                if not skill or not skill.enabled:
+                    self._show_command_result(f"[red]Skill {name} 未安装或未启用，请前往 Skill 管理界面处理。[/red]")
+                    return None
+                if len(parts) < 3 or not parts[2].strip():
+                    self._show_command_result(
+                        f"[yellow]Skill 指令后还需要输入具体任务。[/yellow]\n\n"
+                        f"示例：/skill {skill.name} 帮我完成这个任务"
+                    )
+                    return None
+                if skill.name not in self._session.active_skills:
+                    self._session.active_skills.append(skill.name)
+                    append_session_state(self._session)
+                return parts[2].strip()
+
+        if parts and parts[0].casefold() == "/mcp" and len(parts) >= 2:
+            name = parts[1]
+            if name.casefold() == "deactivate":
+                target = parts[2].strip() if len(parts) == 3 else ""
+                if not target:
+                    self._show_command_result("[yellow]用法：/mcp deactivate <name|all>[/yellow]")
+                    return None
+                self._session.selected_mcps = [] if target.casefold() == "all" else [
+                    item for item in self._session.selected_mcps if item.casefold() != target.casefold()
+                ]
+                append_session_state(self._session)
+                self._show_command_result(f"[green]MCP {target} 已取消选择[/green]")
+                return None
+            if name.casefold() not in {"list", "add", "enable", "disable", "remove", "test", "tools", "info"}:
+                server = self._mcp_manager.get(name) if self._mcp_manager else None
+                if not server or not server.enabled or server.last_error:
+                    self._show_command_result(f"[red]MCP {name} 不可用，请前往 MCP 管理界面测试连接。[/red]")
+                    return None
+                if len(parts) < 3 or not parts[2].strip():
+                    examples = "\n".join(f"/mcp {server.name} {action}" for action, _ in self._mcp_actions(server.name))
+                    self._show_command_result(f"[yellow]MCP {server.name} 还需要选择具体操作。[/yellow]\n\n{examples}")
+                    return None
+                action_text = parts[2].strip()
+                if server.name.casefold() == "memory" and action_text == "保存信息":
+                    self._show_command_result(
+                        "[yellow]“保存信息”后还需要输入需要保存的内容。[/yellow]\n\n"
+                        "/mcp memory 保存信息 我的项目名称是 Coomi"
+                    )
+                    return None
+                if server.name not in self._session.selected_mcps:
+                    self._session.selected_mcps.append(server.name)
+                    append_session_state(self._session)
+                return f"请使用 {server.name} MCP 完成以下操作：{action_text}"
+        return text
 
     def _ensure_new_session_for_welcome_input(self) -> None:
         """Typing on the welcome screen starts a fresh conversation."""
@@ -2071,7 +2178,16 @@ class CoomiApp(App):
                     cwd=self._cwd,
                     model_display=self._display_name,
                     plan_mode=self._plan_mode,
+                    active_skills=self._session.active_skills,
+                    selected_mcps=self._session.selected_mcps,
                 )
+                for skill_name in self._session.active_skills:
+                    skill = self._skill_manager.get(skill_name) if self._skill_manager else None
+                    if skill and skill.enabled:
+                        self._wl(log, f"[bold green]Skill {skill.name} 已触发[/bold green]")
+                for server_name in self._session.selected_mcps:
+                    self._wl(log, f"[bold cyan]MCP {server_name} 已选择[/bold cyan]")
+                self._mcp_called_this_turn.clear()
                 preview.show_status("Waiting for model")
 
                 async for event in self._agent.run_stream(self._session, user_input):
@@ -2112,6 +2228,11 @@ class CoomiApp(App):
                             log.write(Markdown(self._stream_buffer))
                             self._stream_buffer = ""
                         tool_name = event.tool_name
+                        if tool_name.startswith("mcp__"):
+                            pieces = tool_name.split("__", 2)
+                            if len(pieces) == 3:
+                                self._mcp_called_this_turn.add(pieces[1])
+                                self._wl(log, f"[cyan]MCP {pieces[1]} · {pieces[2]} 正在调用[/cyan]")
                         if tool_name in self._active_banners:
                             banner = self._active_banners[tool_name]
                             if event.arguments:
@@ -2140,6 +2261,12 @@ class CoomiApp(App):
                             )
                             log.write(banner.build())
                         preview.show_thinking()
+                        if event.tool_name.startswith("mcp__"):
+                            pieces = event.tool_name.split("__", 2)
+                            if len(pieces) == 3:
+                                state = "调用失败" if event.is_error else "调用成功"
+                                color = "red" if event.is_error else "green"
+                                self._wl(log, f"[{color}]MCP {pieces[1]} · {pieces[2]} {state}[/{color}]")
 
                     # --- 缓存命中 ---
                     elif isinstance(event, ToolCacheHit):
@@ -2205,6 +2332,9 @@ class CoomiApp(App):
                     preview.show_thinking()
                     continue
                 else:
+                    for server_name in self._session.selected_mcps:
+                        if server_name not in self._mcp_called_this_turn:
+                            self._wl(log, f"[dim]MCP {server_name} 本轮未调用：模型判断当前回复无需工具[/dim]")
                     break
 
         except Exception as e:

@@ -82,6 +82,22 @@ def append_message(session: Session, message: Message) -> None:
     )
 
 
+def append_session_state(session: Session) -> None:
+    """Persist extension activation state without rewriting history."""
+    if not session.history_path:
+        return
+    _append_jsonl(
+        Path(session.history_path),
+        {
+            "type": "state",
+            "session_id": session.id,
+            "created_at": datetime.now().isoformat(),
+            "active_skills": session.active_skills,
+            "selected_mcps": session.selected_mcps,
+        },
+    )
+
+
 def list_session_records(
     history_dir: Path | None = None,
     limit: int = 20,
@@ -122,6 +138,9 @@ def load_session_from_jsonl(path: str | Path) -> Session:
             elif entry.get("type") == "message":
                 msg_data = entry.get("message") or {}
                 messages.append(_message_from_json(msg_data))
+            elif entry.get("type") == "state":
+                metadata["active_skills"] = entry.get("active_skills") or []
+                metadata["selected_mcps"] = entry.get("selected_mcps") or []
 
     created_at = _parse_dt(metadata.get("created_at")) or datetime.now()
     session = Session(
@@ -131,6 +150,8 @@ def load_session_from_jsonl(path: str | Path) -> Session:
         created_at=created_at,
         current_model=metadata.get("model") or None,
         history_path=str(source),
+        active_skills=list(metadata.get("active_skills") or []),
+        selected_mcps=list(metadata.get("selected_mcps") or []),
     )
     session.token_usage = TokenUsage()
     return session

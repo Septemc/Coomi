@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coomi-agent"
-version = "0.2.1"
+version = "1.0.0"
 description = "一款纯净的自主 Agent 系统。"
 requires-python = ">=3.9"
 license = {text = "MIT"}

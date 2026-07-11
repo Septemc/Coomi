@@ -28,15 +28,16 @@ COMMANDS = [
 class CommandList(Widget):
     """内联斜杠指令列表 — render() 即时渲染"""
 
-    def __init__(self, **kwargs):
+    def __init__(self, commands: list[tuple[str, str, str]] | None = None, **kwargs):
         super().__init__(**kwargs)
+        self._commands = commands or [(c, d, "command") for c, d in COMMANDS]
         self._filter = ""
         self._selected = 0
 
     @property
-    def filtered(self) -> list[tuple[str, str]]:
+    def filtered(self) -> list[tuple[str, str, str]]:
         f = self._filter.lower()
-        return [(c, d) for c, d in COMMANDS if f in c.lower()]
+        return [(c, d, kind) for c, d, kind in self._commands if f in c.lower() or f in d.lower()]
 
     def set_filter(self, text: str) -> None:
         self._filter = text
@@ -61,13 +62,19 @@ class CommandList(Widget):
             return items[self._selected][0]
         return None
 
+    def get_selected_item(self) -> tuple[str, str, str] | None:
+        items = self.filtered
+        if items and self._selected < len(items):
+            return items[self._selected]
+        return None
+
     def render(self) -> Table:
         table = Table.grid(padding=(0, 1))
         items = self.filtered
         if not items:
             table.add_row(Text.from_markup("[dim]无匹配指令[/dim]"))
             return table
-        for i, (cmd, desc) in enumerate(items):
+        for i, (cmd, desc, _kind) in enumerate(items):
             if i == self._selected:
                 table.add_row(Text.from_markup(
                     f"[bold reverse]{cmd}[/bold reverse]  [dim]{desc}[/dim]"

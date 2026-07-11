@@ -477,3 +477,16 @@ def test_readme_uses_absolute_pypi_safe_image_and_documents_marketplace():
     assert "](image/README/" not in readme
     assert "Skill 与 MCP 管理中心" in readme
     assert "`Delete`" in readme
+
+
+@pytest.mark.asyncio
+async def test_skill_marketplace_supports_left_right_action_focus():
+    manager = FakeSkillManager()
+    manager.records["demo"] = SkillRecord(name="demo", path="/tmp/demo", enabled=True)
+    screen = SkillMarketplaceScreen(manager, catalog=[_skill_entry()])
+    async with ScreenHost(screen).run_test(size=(100, 32)) as pilot:
+        await pilot.press("right")
+        await pilot.pause()
+        assert screen._action_index == 1
+        await pilot.press("left")
+        assert screen._action_index == 0

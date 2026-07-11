@@ -161,12 +161,18 @@ class SkillManager:
             lines.append(f"Description: {record.description}")
         return "\n".join(lines)
 
-    def build_prompt_context(self, current_context: str = "") -> str:
+    def build_prompt_context(
+        self, current_context: str = "", active_skills: list[str] | None = None
+    ) -> str:
         enabled = self.list(enabled_only=True)
         if not enabled:
             return ""
 
-        selected = [record for record in enabled if _skill_requested(record, current_context)]
+        active = {name.casefold() for name in (active_skills or [])}
+        selected = [
+            record for record in enabled
+            if record.name.casefold() in active or _skill_requested(record, current_context)
+        ]
         index_lines = [
             "## Available Skills",
             "Enabled skills are available by name. Use a skill when it is clearly relevant, "

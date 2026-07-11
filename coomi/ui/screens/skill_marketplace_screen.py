@@ -28,6 +28,8 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         Binding("escape", "cancel", "Back", priority=True),
         Binding("up", "move_up", "Up", priority=True),
         Binding("down", "move_down", "Down", priority=True),
+        Binding("left", "move_action_left", "Action", priority=True),
+        Binding("right", "move_action_right", "Action", priority=True),
         Binding("enter", "confirm", "Install / Check / Update", priority=True),
         Binding("delete", "delete_skill", "Uninstall", priority=True),
     ]
@@ -53,6 +55,7 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         self._busy = False
         self._delete_pending = ""
         self._delete_timer = None
+        self._action_index = 0
         self._rebuild_items()
 
     def compose(self) -> ComposeResult:
@@ -119,7 +122,18 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         else:
             state = "已安装"
         marker = "精选" if entry else "本地/手动"
-        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{marker}[/dim]"
+        actions = self._actions(record)
+        rendered_actions = " | ".join(
+            f"[reverse]{escape(action)}[/reverse]" if i == self._action_index else escape(action)
+            for i, action in enumerate(actions)
+        )
+        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{marker}[/dim]  {rendered_actions}"
+
+    @staticmethod
+    def _actions(record: SkillRecord | None) -> list[str]:
+        if record is None:
+            return ["安装"]
+        return ["关闭" if record.enabled else "启用", "配置", "检查更新", "卸载"]
 
     def _selected_index(self) -> int:
         try:
@@ -200,6 +214,21 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         options = self.query_one("#skill-marketplace-list", OptionList)
         options.highlighted = (self._selected_index() + delta) % len(self._items)
         options.scroll_to_highlight()
+        self._action_index = 0
+        self._refresh_view(self._selected_id())
+
+    def action_move_action_left(self) -> None:
+        self._move_action(-1)
+
+    def action_move_action_right(self) -> None:
+        self._move_action(1)
+
+    def _move_action(self, delta: int) -> None:
+        item = self._selected_item()
+        if not item:
+            return
+        self._action_index = (self._action_index + delta) % len(self._actions(item[2]))
+        self._refresh_view(item[0])
 
     async def action_confirm(self) -> None:
         item = self._selected_item()
@@ -212,6 +241,22 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         if self._plan_mode:
             self._errors[item_id] = "Plan Mode 下只能浏览，不能安装、更新或卸载。"
             self._refresh_view(item_id)
+            return
+
+        action = self._actions(record)[self._action_index]
+        if record is not None and action in {"启用", "关闭"}:
+            updated = self._manager.enable(item_id, enabled=action == "启用")
+            self._errors[item_id] = f"已{'启用' if updated.enabled else '关闭'}。"
+            await self._changed()
+            self._rebuild_items()
+            self._refresh_view(item_id)
+            return
+        if record is not None and action == "配置":
+            self._errors[item_id] = "Skill 无额外参数；配置由 SKILL.md 提供，详情已显示在当前页面。"
+            self._refresh_view(item_id)
+            return
+        if record is not None and action == "卸载":
+            await self.action_delete_skill()
             return
 
         self._busy = True
@@ -228,6 +273,7 @@ class SkillMarketplaceScreen(ModalScreen[None]):
                     entry.id,
                     True,
                 )
+                self._action_index = 2
                 self._updates.pop(item_id, None)
                 await self._changed()
             else:

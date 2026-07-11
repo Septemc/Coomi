@@ -28,19 +28,19 @@ SETTINGS_GUIDE = {
     "install_skill": (
         "[bold cyan]当前选中：Skill[/bold cyan]\n"
         "Skill 是可安装、可启用/停用的能力说明包。Coomi 会在相关任务中读取已启用 Skill 的 SKILL.md，把专业流程注入上下文。\n\n"
-        "按 Enter 打开精选管理中心：↑↓ 选择；Enter 安装、检查更新或应用更新；Delete 确认卸载；Esc 返回。\n\n"
+        "按 Enter 打开精选管理中心：↑↓ 选择条目；←→ 选择启用/关闭、配置、检查更新或卸载；Enter 执行；Delete 确认卸载；Esc 返回。\n\n"
         "[bold]常用命令[/bold]\n"
         "/skill list 查看已安装 Skill\n"
         "/skill install C:\\path\\my-skill 安装本地 Skill 目录，目录内需要 SKILL.md\n"
         "/skill install https://github.com/owner/repo/tree/main/skills/name 从 GitHub 安装\n"
         "/skill enable name 启用；/skill disable name 停用\n"
         "/skill update name 更新 GitHub 来源 Skill；/skill info name 查看详情\n"
-        "使用时直接提到任务领域或写 $SkillName，Coomi 会在匹配时加载说明。\n"
+        "推荐输入 /skill name <任务> 显式激活；激活后当前会话会持续使用，并在每轮显示触发状态。\n"
     ),
     "install_mcp": (
         "[bold cyan]当前选中：MCP[/bold cyan]\n"
         "MCP 用来接入外部工具服务器。启用成功后，服务器暴露的工具会注册成 mcp__server__tool 格式，Agent 可以像普通工具一样调用。\n\n"
-        "按 Enter 打开精选管理中心：↑↓ 选择；Enter 配置或测试并刷新工具；Delete 确认移除；Esc 返回。需要 Token、目录或数据库地址的项目会先显示配置表单。\n\n"
+        "按 Enter 打开精选管理中心：↑↓ 选择条目；←→ 选择启用/关闭、配置、测试连接、检查更新或卸载；Enter 执行；Delete 确认移除；Esc 返回。\n\n"
         "[bold]常用命令[/bold]\n"
         "/mcp list 查看服务器\n"
         "/mcp add files stdio npx -y @modelcontextprotocol/server-filesystem F:\\Work 添加 stdio 服务器\n"

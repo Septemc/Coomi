@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from coomi.engine.session import build_system_prompt
+from coomi.engine.session import SessionManager, build_system_prompt
+from coomi.services.session_history import append_session_state, load_session_from_jsonl
 from coomi.services.mcp.config import McpConfigStore
 from coomi.services.mcp.client import StdioMcpClient
 from coomi.services.mcp.manager import McpManager
@@ -243,3 +244,29 @@ async def test_plan_mode_blocks_skill_and_mcp_mutations(tmp_path: Path) -> None:
 
     assert "Plan Mode is active" in skill_result
     assert "Plan Mode is active" in mcp_result
+
+
+def test_extension_command_parser_activates_skill_for_session(tmp_path: Path) -> None:
+    source = _make_skill(tmp_path / "source", "Frontend Design")
+    app = CoomiApp()
+    app._skill_manager = SkillManager(
+        SkillConfig(config_path=tmp_path / "skills.json", skills_dir=tmp_path / "installed")
+    )
+    record = app._skill_manager.install(str(source), name="frontend-design")
+    app._session = SessionManager(history_dir=tmp_path).create_session()
+
+    assert app._prepare_extension_request("/skill frontend-design") is None
+    assert app._session.active_skills == []
+    assert app._prepare_extension_request("/skill frontend-design 设计登录页") == "设计登录页"
+    assert app._session.active_skills == [record.name]
+
+
+def test_session_extension_state_round_trip(tmp_path: Path) -> None:
+    session = SessionManager(history_dir=tmp_path).create_session()
+    session.active_skills = ["frontend-design"]
+    session.selected_mcps = ["memory"]
+    append_session_state(session)
+
+    loaded = load_session_from_jsonl(session.history_path)
+    assert loaded.active_skills == ["frontend-design"]
+    assert loaded.selected_mcps == ["memory"]

@@ -96,6 +96,8 @@ class Session:
     current_model: str | None = None
     last_prompt_tokens: int = 0  # 最近一次 API 调用的 prompt_tokens（真实值）
     history_path: str | None = None
+    active_skills: list[str] = field(default_factory=list)
+    selected_mcps: list[str] = field(default_factory=list)
 
     def get_messages_for_api(self) -> list[dict[str, Any]]:
         """获取API格式的消息列表"""

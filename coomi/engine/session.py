@@ -242,6 +242,8 @@ async def build_system_prompt(
     cwd: str | None = None,
     model_display: str = "",
     plan_mode: bool = False,
+    active_skills: list[str] | None = None,
+    selected_mcps: list[str] | None = None,
 ) -> str:
     """构建含记忆的 System Prompt（静态/动态分割线）
 
@@ -286,9 +288,18 @@ async def build_system_prompt(
         )
 
     if skill_manager:
-        skill_context = skill_manager.build_prompt_context(current_context)
+        skill_context = skill_manager.build_prompt_context(current_context, active_skills)
         if skill_context:
             dynamic_parts.append(skill_context)
+
+    if selected_mcps:
+        dynamic_parts.append(
+            "## Selected MCP Servers\n"
+            "The user selected these MCP servers for this conversation: "
+            + ", ".join(selected_mcps)
+            + ". Use their tools when the request benefits from them. Do not make meaningless "
+            "tool calls merely to prove selection."
+        )
 
     # 1.5 Plan Mode 指令（仅在激活时注入）
     if plan_mode:

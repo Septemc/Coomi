@@ -90,6 +90,8 @@ class McpMarketplaceScreen(ModalScreen[None]):
         Binding("escape", "cancel", "Back", priority=True),
         Binding("up", "move_up", "Up", priority=True),
         Binding("down", "move_down", "Down", priority=True),
+        Binding("left", "move_action_left", "Action", priority=True),
+        Binding("right", "move_action_right", "Action", priority=True),
         Binding("enter", "confirm", "Install / Test", priority=True),
         Binding("delete", "delete_mcp", "Remove", priority=True),
     ]
@@ -114,6 +116,7 @@ class McpMarketplaceScreen(ModalScreen[None]):
         self._busy = False
         self._delete_pending = ""
         self._delete_timer = None
+        self._action_index = 0
         self._rebuild_items()
 
     def compose(self) -> ComposeResult:
@@ -194,7 +197,18 @@ class McpMarketplaceScreen(ModalScreen[None]):
         else:
             state = "已配置"
         source = "精选" if entry else "手动"
-        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{source}[/dim]"
+        actions = self._actions(server)
+        rendered = " | ".join(
+            f"[reverse]{escape(action)}[/reverse]" if i == self._action_index else escape(action)
+            for i, action in enumerate(actions)
+        )
+        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{source}[/dim]  {rendered}"
+
+    @staticmethod
+    def _actions(server: McpServerConfig | None) -> list[str]:
+        if server is None:
+            return ["安装"]
+        return ["关闭" if server.enabled else "启用", "配置", "测试连接", "检查更新", "卸载"]
 
     @on(OptionList.OptionHighlighted)
     def _on_option_highlighted(self) -> None:
@@ -274,6 +288,21 @@ class McpMarketplaceScreen(ModalScreen[None]):
         options = self.query_one("#mcp-marketplace-list", OptionList)
         options.highlighted = (self._selected_index() + delta) % len(self._items)
         options.scroll_to_highlight()
+        self._action_index = 0
+        self._refresh_view(self._selected_id())
+
+    def action_move_action_left(self) -> None:
+        self._move_action(-1)
+
+    def action_move_action_right(self) -> None:
+        self._move_action(1)
+
+    def _move_action(self, delta: int) -> None:
+        item = self._selected_item()
+        if not item:
+            return
+        self._action_index = (self._action_index + delta) % len(self._actions(item[2]))
+        self._refresh_view(item[0])
 
     async def action_confirm(self) -> None:
         item = self._selected_item()
@@ -287,7 +316,31 @@ class McpMarketplaceScreen(ModalScreen[None]):
             self._messages[item_id] = "Plan Mode 下只能浏览，不能配置、测试刷新或移除。"
             self._refresh_view(item_id)
             return
-        if server is None or (entry and server.catalog_signature != entry.signature):
+        action = self._actions(server)[self._action_index]
+        if server is not None and action in {"启用", "关闭"}:
+            updated = self._manager.enable(item_id, enabled=action == "启用")
+            self._messages[item_id] = f"已{'启用' if updated.enabled else '关闭'}。"
+            await self._refresh_registry()
+            self._rebuild_items()
+            self._refresh_view(item_id)
+            return
+        if server is not None and action == "卸载":
+            await self.action_delete_mcp()
+            return
+        if server is not None and action == "检查更新":
+            self._messages[item_id] = (
+                "发现精选配置更新，选择“配置”可重新应用。"
+                if entry and server.catalog_signature != entry.signature else "已是最新精选配置。"
+            )
+            self._refresh_view(item_id)
+            return
+        if server is not None and action == "配置" and entry:
+            if entry.inputs:
+                self.app.push_screen(McpInstallConfigScreen(entry), lambda values: self._on_config_result(entry, values))
+            else:
+                await self._install(entry, {})
+            return
+        if server is None:
             if not entry:
                 self._messages[item_id] = "手动 MCP 没有可应用的精选配置。"
                 self._refresh_view(item_id)
@@ -320,6 +373,7 @@ class McpMarketplaceScreen(ModalScreen[None]):
             rendered = entry.render(values)
             await asyncio.to_thread(self._manager.add_catalog_config, rendered)
             ok, message = await asyncio.to_thread(self._manager.test, item_id)
+            self._action_index = 2
             self._messages[item_id] = message
             if ok:
                 await self._refresh_registry()
