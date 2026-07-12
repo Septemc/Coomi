@@ -526,7 +526,13 @@ def _normalize_mcp_command(text: str) -> dict[str, Any]:
 
 
 def _is_github_skill_url(value: str) -> bool:
-    return is_github_url(value)
+    candidate = value.strip()
+    if not candidate or len(candidate) > 2048 or "\n" in candidate or "\r" in candidate:
+        return False
+    try:
+        return is_github_url(candidate)
+    except ValueError:
+        return False
 
 
 def _is_skill_context(raw: str, value: str) -> bool:
@@ -550,7 +556,15 @@ def _looks_like_local_skill_path(value: str) -> bool:
 
 
 def _looks_like_mcp_url(value: str, raw: str) -> bool:
-    parsed = urlparse(value if "://" in value else f"https://{value}")
+    candidate = value.strip()
+    if not candidate or len(candidate) > 2048 or "\n" in candidate or "\r" in candidate:
+        return False
+    if not re.match(r"^https?://", candidate, re.IGNORECASE):
+        return False
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return False
     if not parsed.netloc:
         return False
     lowered = f"{raw} {parsed.path}".casefold()

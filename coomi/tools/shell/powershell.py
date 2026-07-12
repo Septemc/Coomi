@@ -66,11 +66,15 @@ class PowerShellTool(BaseTool):
         cwd = os.getcwd()
 
         try:
+            process_options: dict[str, Any] = {"stdin": subprocess.DEVNULL}
+            if os.name == "nt":
+                process_options["creationflags"] = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(
                 ["powershell.exe", "-Command", command],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                **process_options,
             )
 
             output = _truncate_output(result.stdout)

@@ -54,6 +54,18 @@ def test_input_intent_detector_recognizes_supported_inputs(tmp_path: Path) -> No
     assert detector.detect("please help me design a roadmap").kind == INTENT_NONE
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "please review [items\n" + "long source line\n" * 500,
+        "http://[invalid\n" + "long source line\n" * 500,
+        "const rows = data.map((item) => [item.id, item.name]);\n" * 300,
+    ],
+)
+def test_long_code_input_never_crashes_or_becomes_mcp_config(text: str) -> None:
+    assert InputIntentDetector().detect(text).kind == INTENT_NONE
+
+
 def test_provider_auto_configurator_normalizes_redacts_and_activates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

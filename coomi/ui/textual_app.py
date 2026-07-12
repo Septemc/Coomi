@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import time
 from typing import Any
@@ -81,6 +82,12 @@ from .screens.command_palette import CommandPalette
 from .terminal_capabilities import supports_modified_enter
 
 SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SGR_MOUSE_REPORT_RE = re.compile(r"(?:\x1b)?\[<\d+;-?\d+;-?\d+[mM]")
+
+
+def strip_sgr_mouse_reports(text: str) -> str:
+    """Remove terminal mouse reports that leaked into printable input."""
+    return SGR_MOUSE_REPORT_RE.sub("", text)
 
 
 # ============================================================
@@ -1690,6 +1697,11 @@ class CoomiApp(App):
         if hasattr(event, "text_area") and event.text_area.id != "prompt-input":
             return
         text = event.text_area.text if hasattr(event, "text_area") else ""
+        clean_text = strip_sgr_mouse_reports(text)
+        if clean_text != text:
+            event.text_area.text = clean_text
+            event.text_area.move_cursor(event.text_area.document.end)
+            text = clean_text
         if text.startswith("/"):
             if not self._command_mode:
                 asyncio.create_task(self._show_command_list())
@@ -2001,15 +2013,31 @@ class CoomiApp(App):
         asyncio.create_task(self._show_auto_config_or_run_agent(text))
 
     async def _show_auto_config_or_run_agent(self, text: str) -> None:
-        auto_config_result = await self._handle_auto_config_input(text)
-        if auto_config_result is not None:
-            self._show_command_result(auto_config_result)
-            self._refresh_status_panel()
-            return
+        try:
+            auto_config_result = await self._handle_auto_config_input(text)
+            if auto_config_result is not None:
+                self._show_command_result(auto_config_result)
+                self._refresh_status_panel()
+                return
 
-        # --- agent execution ---
-        self._ensure_new_session_for_welcome_input()
-        asyncio.create_task(self._run_agent_async(text))
+            # --- agent execution ---
+            self._ensure_new_session_for_welcome_input()
+            await self._run_agent_async(text)
+        except Exception as exc:
+            self._restore_prompt_after_submit_failure(text)
+            self._show_command_result(
+                f"[red]输入提交失败，原文已恢复：[/red] {type(exc).__name__}: {exc}"
+            )
+
+    def _restore_prompt_after_submit_failure(self, text: str) -> None:
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+            if not prompt.text.strip():
+                prompt.text = text
+                prompt.move_cursor(prompt.document.end)
+                prompt.focus()
+        except Exception:
+            pass
 
     async def _run_agent_async(self, user_input: str) -> None:
         """异步执行 agent"""

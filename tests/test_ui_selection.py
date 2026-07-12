@@ -19,7 +19,7 @@ from coomi.ui.screens.main_screen import MainScreen
 from coomi.ui.screens.main_screen import PROMPT_PLACEHOLDER
 from coomi.ui.screens.settings_screen import SettingsScreen
 from coomi.ui.status_line import StatusLine
-from coomi.ui.textual_app import CoomiApp
+from coomi.ui.textual_app import CoomiApp, strip_sgr_mouse_reports
 from coomi.ui.widgets.custom_header import CustomHeader
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
@@ -220,6 +220,12 @@ def test_modified_enter_detection_is_conservative_and_overridable():
 def test_prompt_placeholder_advertises_reliable_multiline_fallback():
     assert "Enter 发送" in PROMPT_PLACEHOLDER
     assert "Shift+Enter / Ctrl+J 换行" in PROMPT_PLACEHOLDER
+
+
+def test_sgr_mouse_reports_are_removed_from_prompt_text():
+    leaked = "before[<35;68;33M[<35;75;30Mafter"
+    assert strip_sgr_mouse_reports(leaked) == "beforeafter"
+    assert strip_sgr_mouse_reports("normal [text]; keep it") == "normal [text]; keep it"
 
 
 @pytest.mark.asyncio
