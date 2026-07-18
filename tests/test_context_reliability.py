@@ -46,13 +46,42 @@ from coomi.tools.task import TodoWriteTool
 from coomi.tools.user import AskUserQuestionTool
 from coomi.tools.workspace.plan_mode import ExitPlanModeTool
 from coomi.ui.tool_formatter import format_tool_display
-from coomi.ui.events import AgentError, ReasoningChunk, TextChunk
+from coomi.ui.events import AgentError, ConnectionRetry, ReasoningChunk, TextChunk
 from coomi.types import LLMResponse, Message, Session, ToolCall
 
 
 class FakeSummaryLLM:
     async def chat(self, messages: list[dict[str, Any]], tools=None, **kwargs):
         return LLMResponse(content="summary")
+
+
+class RetryingStreamProvider(LLMProvider):
+    def __init__(self, failure_mode: str):
+        self.failure_mode = failure_mode
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, **kwargs):
+        return LLMResponse(content="recovered")
+
+    async def chat_stream(self, messages, **kwargs):
+        yield "recovered"
+
+    async def chat_stream_with_tools(self, messages, tools=None, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            if self.failure_mode == "empty_response":
+                return
+            yield {"type": "reasoning_content", "content": "Error: aborted"}
+            if self.failure_mode == "exception":
+                raise httpx.ReadError("request aborted")
+            return
+        yield {"type": "content", "content": "recovered"}
+
+    def switch_model(self, model_name: str) -> str:
+        return model_name
+
+    def get_model_display_name(self) -> str:
+        return "retry-test"
 
 
 class CountingTool(BaseTool):
@@ -2419,6 +2448,79 @@ async def test_tool_executor_keeps_invalid_integer_string_for_validation(tmp_pat
 
 def test_tool_formatter_displays_agent_canonical_name():
     assert format_tool_display("Agent", {"description": "Inspect aliases"}) == "Agent: Inspect aliases"
+
+
+def test_tool_formatter_accepts_string_read_ranges_without_crashing():
+    assert format_tool_display(
+        "Read",
+        {"file_path": "F:/index.html", "offset": "716", "limit": "8"},
+    ) == "Read F:/index.html (lines 716-723)"
+    assert format_tool_display(
+        "Read",
+        {"file_path": "F:/index.html", "offset": "start", "limit": "many"},
+    ) == "Read F:/index.html (offset start, limit many)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ["exception", "abort_response", "empty_response"])
+async def test_agent_loop_retries_abort_before_committed_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+):
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("coomi.engine.loop.asyncio.sleep", no_sleep)
+    provider = RetryingStreamProvider(failure_mode)
+    agent = AgentLoop(
+        provider,
+        ToolRegistry(),
+        project_path=str(tmp_path),
+        permission_system=full_access_permissions(),
+    )
+    session = Session(id="retry", system_prompt="sys")
+
+    events = [event async for event in agent.run_stream(session, "hello")]
+
+    assert provider.calls == 2
+    assert any(
+        isinstance(event, ConnectionRetry)
+        and event.attempt == 2
+        and event.max_attempts == 3
+        for event in events
+    )
+    assert "".join(event.content for event in events if isinstance(event, TextChunk)) == "recovered"
+    assert not any(isinstance(event, AgentError) for event in events)
+    assert session.messages[-1].content == "recovered"
+    assert session.messages[-1].reasoning_content is None
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_coerces_native_scalar_arguments_by_schema(tmp_path: Path):
+    registry = ToolRegistry()
+    tool = TypedArgumentTool(output="typed ok")
+    registry.register(tool)
+    executor = ToolExecutor(
+        registry,
+        permission_system=full_access_permissions(),
+        project_path=str(tmp_path),
+    )
+
+    outcome = await executor.execute(
+        Session(id="s"),
+        ToolCall(
+            id="native_call_typed",
+            name="Typed",
+            arguments={"file_path": "x", "limit": "50", "enabled": "true"},
+            source="native",
+        ),
+    )
+
+    assert not outcome.is_error
+    assert tool.last_arguments is not None
+    assert tool.last_arguments["limit"] == 50
+    assert tool.last_arguments["enabled"] is True
 
 
 def test_permission_modes_change_tool_policy():

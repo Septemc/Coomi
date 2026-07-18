@@ -60,6 +60,7 @@ from ..ui.events import (
     AgentCancelled,
     AgentError,
     CompressionEvent,
+    ConnectionRetry,
     LoopProgress,
     LoopStepStart,
     LoopStepDone,
@@ -2204,6 +2205,26 @@ class CoomiApp(App):
         """Ctrl+R: 切换推理内容可见性。"""
         self._reasoning_visible = not self._reasoning_visible
 
+    def _flush_reasoning(self, log: RichLog) -> bool:
+        """Commit one model reasoning phase and reset it before tool execution."""
+        reasoning = self._full_reasoning
+        self._full_reasoning = ""
+        started_at = self._reasoning_start_time
+        self._reasoning_start_time = 0.0
+        if not reasoning or not self._reasoning_visible:
+            return False
+
+        now = time.time()
+        elapsed = max(0.0, now - started_at) if isinstance(started_at, (int, float)) else 0.0
+        reasoning_text = reasoning.replace("\n", "\n│ ")
+        reasoning_block = (
+            f"[dim]┌─ [Thinking ({elapsed:.1f}s)][/dim]\n"
+            f"[dim]│ {reasoning_text}[/dim]\n"
+            f"[dim]└─[/dim]"
+        )
+        log.write(reasoning_block)
+        return True
+
     def _reset_exit_pending(self) -> None:
         """Reset exit-pending state after timeout."""
         self._exit_pending = False
@@ -2277,15 +2298,7 @@ class CoomiApp(App):
                     if isinstance(event, TextChunk):
                         # 首个文本 chunk 到达时，先渲染已累积的推理内容
                         if self._full_reasoning and self._reasoning_visible and not self._stream_buffer:
-                            elapsed = time.time() - self._reasoning_start_time
-                            reasoning_text = self._full_reasoning.replace("\n", "\n│ ")
-                            reasoning_block = (
-                                f"[dim]┌─ [Thinking ({elapsed:.1f}s)][/dim]\n"
-                                f"[dim]│ {reasoning_text}[/dim]\n"
-                                f"[dim]└─[/dim]"
-                            )
-                            log.write(reasoning_block)
-                            self._full_reasoning = ""
+                            self._flush_reasoning(log)
 
                         self._stream_buffer += event.content
                         preview.show_text(self._stream_buffer)
@@ -2300,6 +2313,9 @@ class CoomiApp(App):
 
                     # --- 工具开始（双重 yield） ---
                     elif isinstance(event, ToolStart):
+                        # Reasoning belongs to the model phase before this tool. Flush it
+                        # now so later tool rounds cannot accumulate in the same box.
+                        self._flush_reasoning(log)
                         if self._stream_buffer.strip():
                             preview.flush_pending()
                             log.write(Markdown(self._stream_buffer))
@@ -2358,6 +2374,21 @@ class CoomiApp(App):
                         self.status_line.update_usage(event.usage)
                         status.refresh()
 
+                    elif isinstance(event, ConnectionRetry):
+                        # The failed attempt never committed content/tool calls, so its
+                        # preview can be safely replaced by the retried response.
+                        self._stream_buffer = ""
+                        self._full_reasoning = ""
+                        self._reasoning_start_time = 0.0
+                        preview.show_status(
+                            f"Reconnecting ({event.attempt}/{event.max_attempts})"
+                        )
+                        self._wl(
+                            log,
+                            f"[yellow]连接中断，{event.delay:.0f}s 后自动重试 "
+                            f"({event.attempt}/{event.max_attempts})…[/yellow]",
+                        )
+
                     # --- 压缩事件 ---
                     elif isinstance(event, CompressionEvent):
                         status.set_compressing(event.before, event.after)
@@ -2382,16 +2413,7 @@ class CoomiApp(App):
                         break  # 退出当前 run，但 finally 块会正常恢复 UI
 
                 # --- 流结束：推理内容若未渲染（无 TextChunk 跟随），在此兜底 ---
-                if self._full_reasoning and self._reasoning_visible:
-                    elapsed = time.time() - self._reasoning_start_time
-                    reasoning_text = self._full_reasoning.replace("\n", "\n│ ")
-                    reasoning_block = (
-                        f"[dim]┌─ [Thinking ({elapsed:.1f}s)][/dim]\n"
-                        f"[dim]│ {reasoning_text}[/dim]\n"
-                        f"[dim]└─[/dim]"
-                    )
-                    log.write(reasoning_block)
-                    self._full_reasoning = ""
+                self._flush_reasoning(log)
 
                 # --- 流结束：flush 文本缓冲区 ---
                 if self._stream_buffer.strip():

@@ -44,6 +44,29 @@ class UiTestProvider:
         return "Test Model"
 
 
+class RecordingLog:
+    def __init__(self) -> None:
+        self.entries: list[object] = []
+
+    def write(self, value: object) -> None:
+        self.entries.append(value)
+
+
+def test_reasoning_flush_resets_each_model_phase(monkeypatch: pytest.MonkeyPatch):
+    app = CoomiApp()
+    log = RecordingLog()
+    app._reasoning_visible = True
+    app._full_reasoning = "Inspecting the file"
+    app._reasoning_start_time = 100.0
+    monkeypatch.setattr("coomi.ui.textual_app.time.time", lambda: 102.5)
+
+    assert app._flush_reasoning(log) is True
+    assert app._full_reasoning == ""
+    assert app._reasoning_start_time == 0.0
+    assert len(log.entries) == 1
+    assert "Thinking (2.5s)" in str(log.entries[0])
+
+
 @pytest.fixture(autouse=True)
 def _use_test_provider(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(

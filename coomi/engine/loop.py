@@ -26,6 +26,7 @@ from ..ui.events import (
     AgentError,
     AgentEvent,
     CompressionEvent,
+    ConnectionRetry,
     ReasoningChunk,
     TextChunk,
     ToolDone,
@@ -46,6 +47,22 @@ MAX_CONSECUTIVE_LOW_INFO_RESULTS = 8
 MAX_TOOL_CONCURRENCY = int(os.environ.get("COOMI_MAX_TOOL_CONCURRENCY", "10"))
 MAX_MALFORMED_TEXT_TOOL_RETRIES = 3
 logger = logging.getLogger(__name__)
+
+_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_RETRYABLE_ERROR_MARKERS = (
+    "aborted",
+    "connection reset",
+    "connection closed",
+    "connection refused",
+    "server disconnected",
+    "remote protocol error",
+    "incomplete chunked read",
+    "empty stream",
+    "network error",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
+)
 
 _TOOL_INTENT_HINTS = (
     "file",
@@ -132,6 +149,40 @@ def _should_omit_tools_for_input(user_input: str) -> bool:
         return False
     compact = "".join(text.split())
     return len(compact) <= 24
+
+
+def _is_retryable_llm_error(error: Exception) -> bool:
+    """Return whether an LLM failure is likely transient and safe to retry."""
+    status_code = getattr(error, "status_code", None)
+    if status_code in _RETRYABLE_STATUS_CODES:
+        return True
+
+    error_name = type(error).__name__.casefold()
+    if any(
+        marker in error_name
+        for marker in ("connection", "connect", "timeout", "ratelimit", "internalserver")
+    ):
+        return True
+
+    message = str(error).casefold()
+    return any(marker in message for marker in _RETRYABLE_ERROR_MARKERS)
+
+
+def _abort_only_stream(content: str, reasoning: str, had_tool_call: bool = False) -> str | None:
+    """Detect provider-side abort sent as a tiny response instead of an exception."""
+    if had_tool_call:
+        return None
+    combined = " ".join(part.strip() for part in (content, reasoning) if part.strip())
+    normalized = " ".join(combined.casefold().split())
+    if not normalized or len(normalized) > 240:
+        return None
+    if normalized in {"aborted", "error: aborted", "request aborted", "error: request aborted"}:
+        return combined
+    if normalized.startswith("error:") and any(
+        marker in normalized for marker in _RETRYABLE_ERROR_MARKERS
+    ):
+        return combined
+    return None
 
 
 class CancelToken:
@@ -357,21 +408,61 @@ class AgentLoop:
         raise last_error  # type: ignore[misc]
 
     async def _chat_stream_with_retry(self, messages, tools=None):
-        """带重试的流式 LLM 调用（仅在未发送内容时重试）"""
+        """Retry transient stream failures before content or tool calls are committed."""
         last_error = None
-        has_yielded = False
         for attempt in range(MAX_RETRIES):
+            committed_output = False
+            attempt_content: list[str] = []
+            attempt_reasoning: list[str] = []
+            had_tool_call = False
             try:
                 async for chunk in self.llm.chat_stream_with_tools(messages, tools=tools):
-                    has_yielded = True
+                    chunk_type = chunk.get("type")
+                    if chunk_type == "content":
+                        attempt_content.append(str(chunk.get("content") or ""))
+                        committed_output = True
+                    elif chunk_type == "reasoning_content":
+                        attempt_reasoning.append(str(chunk.get("content") or ""))
+                    elif chunk_type in {"tool_call", "tool_call_start"}:
+                        committed_output = True
+                        had_tool_call = True
                     yield chunk
+
+                content_text = "".join(attempt_content)
+                reasoning_text = "".join(attempt_reasoning)
+                abort_message = _abort_only_stream(
+                    content_text,
+                    reasoning_text,
+                    had_tool_call=had_tool_call,
+                )
+                if abort_message:
+                    raise RuntimeError(f"Transient stream aborted: {abort_message}")
+                if not had_tool_call and not content_text.strip() and not reasoning_text.strip():
+                    raise RuntimeError("Transient empty stream response")
                 return  # 成功完成
             except Exception as e:
                 last_error = e
-                if has_yielded:
+                abort_only = _abort_only_stream(
+                    "".join(attempt_content),
+                    "".join(attempt_reasoning),
+                    had_tool_call=had_tool_call,
+                )
+                can_retry = (
+                    attempt < MAX_RETRIES - 1
+                    and _is_retryable_llm_error(e)
+                    and (not committed_output or abort_only is not None)
+                )
+                if not can_retry:
                     raise last_error
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(2 ** attempt)
+                delay = float(2 ** attempt)
+                yield {
+                    "type": "connection_retry",
+                    "attempt": attempt + 2,
+                    "max_attempts": MAX_RETRIES,
+                    "delay": delay,
+                    "message": str(e),
+                }
+                await asyncio.sleep(delay)
         raise last_error  # type: ignore[misc]
 
     def _build_loop_warning(self, tool_name: str, consecutive_count: int, is_stuck: bool) -> str:
@@ -498,8 +589,25 @@ class AgentLoop:
                     elif chunk["type"] == "usage":
                         update_token_usage(session, chunk["data"])
                         yield UsageUpdate(usage=chunk["data"])
+                    elif chunk["type"] == "connection_retry":
+                        # Discard the failed attempt's uncommitted response and reset
+                        # streaming parsers before reconnecting.
+                        full_content = ""
+                        full_reasoning = ""
+                        tool_calls_data = []
+                        text_tool_filter = TextToolCallFilter(mode=text_tool_mode)
+                        reasoning_tool_filter = TextToolCallFilter(mode=text_tool_mode)
+                        yield ConnectionRetry(
+                            attempt=chunk["attempt"],
+                            max_attempts=chunk["max_attempts"],
+                            delay=chunk["delay"],
+                            message=chunk["message"],
+                        )
             except Exception as e:
                 # P0-C: LLM API 异常降级 — 不崩溃，优雅退出当前 run
+                if _abort_only_stream(full_content, full_reasoning):
+                    full_content = ""
+                    full_reasoning = ""
                 source_file = os.path.abspath(__file__)
                 yield AgentError(
                     message=(

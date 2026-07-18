@@ -4,6 +4,22 @@ from __future__ import annotations
 from typing import Any
 
 
+def _display_integer(value: Any) -> int | None:
+    """Return an integer for display math without trusting provider argument types."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.lstrip("+-").isdigit():
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
+
+
 def format_tool_display(name: str, arguments: dict[str, Any] | None = None) -> str:
     """按工具类型格式化显示文本
 
@@ -22,7 +38,12 @@ def format_tool_display(name: str, arguments: dict[str, Any] | None = None) -> s
         limit = args.get("limit")
         if file_path:
             if offset is not None and limit is not None:
-                return f"Read {file_path} (lines {offset}-{offset + limit - 1})"
+                numeric_offset = _display_integer(offset)
+                numeric_limit = _display_integer(limit)
+                if numeric_offset is not None and numeric_limit is not None:
+                    end_line = numeric_offset + max(0, numeric_limit - 1)
+                    return f"Read {file_path} (lines {numeric_offset}-{end_line})"
+                return f"Read {file_path} (offset {offset}, limit {limit})"
             elif offset is not None:
                 return f"Read {file_path} (from line {offset})"
             return f"Read {file_path}"

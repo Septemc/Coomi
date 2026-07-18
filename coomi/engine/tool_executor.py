@@ -160,10 +160,12 @@ class ToolExecutor:
         except Exception as exc:
             validation_error = f"Could not load schema: {exc}"
         else:
-            if _should_coerce_arguments(tool_call):
-                coerced_arguments = _coerce_arguments_for_schema(tool_call.arguments, schema)
-                if coerced_arguments != tool_call.arguments:
-                    tool_call = replace(tool_call, arguments=coerced_arguments)
+            # OpenAI-compatible gateways sometimes serialize JSON scalar arguments
+            # as strings even for native tool calls. Schema-guided coercion is safe
+            # for every source because string-typed fields are deliberately preserved.
+            coerced_arguments = _coerce_arguments_for_schema(tool_call.arguments, schema)
+            if coerced_arguments != tool_call.arguments:
+                tool_call = replace(tool_call, arguments=coerced_arguments)
             validation_error = self._validate_arguments(
                 tool,
                 tool_call.arguments,
@@ -405,10 +407,6 @@ def _matches_json_type(value: Any, expected_type: str | list[str]) -> bool:
     if expected_type == "null":
         return value is None
     return True
-
-
-def _should_coerce_arguments(tool_call: ToolCall) -> bool:
-    return tool_call.source == "text_fallback" or tool_call.id.startswith("text_call_")
 
 
 def _coerce_arguments_for_schema(

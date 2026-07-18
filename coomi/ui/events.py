@@ -57,6 +57,15 @@ class UsageUpdate(AgentEvent):
 
 
 @dataclass
+class ConnectionRetry(AgentEvent):
+    """流式连接在产生有效回复前中断，正在自动重试。"""
+    attempt: int = 1
+    max_attempts: int = 1
+    delay: float = 0.0
+    message: str = ""
+
+
+@dataclass
 class CompressionEvent(AgentEvent):
     """上下文压缩完成"""
     before: int = 0
