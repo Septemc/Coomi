@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from rich.cells import cell_len
 from rich.console import Console
 from rich.segment import Segment
 from rich.style import Style
@@ -20,7 +21,7 @@ from coomi.ui.screens.main_screen import PROMPT_PLACEHOLDER
 from coomi.ui.screens.settings_screen import SettingsScreen
 from coomi.ui.status_line import StatusLine
 from coomi.ui.textual_app import CoomiApp, strip_sgr_mouse_reports
-from coomi.ui.widgets.custom_header import CustomHeader
+from coomi.ui.widgets.custom_header import CustomHeader, _middle_ellipsis
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
@@ -319,16 +320,32 @@ async def test_coomi_app_routes_text_to_prompt_when_focus_drifts():
 @pytest.mark.asyncio
 async def test_custom_header_home_and_setting_are_clickable():
     app = HeaderClickTestApp()
+    app._cwd = "测试使用001"
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
 
         header = app.screen.query_one(CustomHeader)
-        await pilot.click(header, offset=(header._home_start, 0))
-        await pilot.click(header, offset=(header._setting_start, 0))
+        rendered = header.render()
+        home_x = cell_len(rendered.plain[: rendered.plain.index("Home")])
+        setting_x = cell_len(rendered.plain[: rendered.plain.index("Setting")])
+
+        assert rendered.cell_len == header.size.width
+        assert home_x == header._home_start
+        assert setting_x == header._setting_start
+
+        await pilot.click(header, offset=(home_x, 0))
+        await pilot.click(header, offset=(setting_x, 0))
         await pilot.pause()
 
         assert app.home_clicks == 1
         assert app.settings_clicks == 1
+
+
+def test_custom_header_middle_ellipsis_uses_terminal_cell_width():
+    rendered = _middle_ellipsis(r"F:\_WorkSpace\_Temp\测试使用001", 24)
+
+    assert "..." in rendered
+    assert cell_len(rendered) <= 24
 
 
 def test_plan_panel_collects_multi_select_answers():

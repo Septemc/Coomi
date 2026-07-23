@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from ..base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
@@ -30,6 +32,64 @@ EXIT_CODE_HINTS: dict[int, str] = {
 MAX_OUTPUT_LENGTH = 50000  # 输出截断阈值
 
 
+def _find_windows_bash() -> str | None:
+    """Find a native Windows Bash implementation and exclude WSL launchers."""
+    candidates: list[Path] = []
+
+    git_executable = shutil.which("git")
+    if git_executable:
+        git_root = Path(git_executable).resolve().parent.parent
+        candidates.extend(
+            [
+                git_root / "bin" / "bash.exe",
+                git_root / "usr" / "bin" / "bash.exe",
+            ]
+        )
+
+    for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(variable)
+        if base:
+            candidates.extend(
+                [
+                    Path(base) / "Git" / "bin" / "bash.exe",
+                    Path(base) / "Git" / "usr" / "bin" / "bash.exe",
+                ]
+            )
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.extend(
+            [
+                Path(local_app_data) / "Programs" / "Git" / "bin" / "bash.exe",
+                Path(local_app_data) / "Programs" / "Git" / "usr" / "bin" / "bash.exe",
+            ]
+        )
+
+    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
+        if path_entry:
+            candidates.append(Path(path_entry) / "bash.exe")
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate).replace("/", "\\").casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if normalized.endswith("\\windows\\system32\\bash.exe"):
+            continue
+        if "\\microsoft\\windowsapps\\bash.exe" in normalized:
+            continue
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _windows_bash_invocation(command: str, bash_executable: str | None) -> list[str] | None:
+    if not bash_executable:
+        return None
+    return [bash_executable, "--noprofile", "--norc", "-c", command]
+
+
 def _truncate_output(output: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
     """截断过长的输出"""
     if len(output) <= max_length:
@@ -47,8 +107,9 @@ class BashTool(BaseTool):
 
     name = "Bash"
     description = (
-        "Executes a bash/sh command and returns its output. On Windows, prefer the "
-        "PowerShell tool for Windows paths, file operations, cmdlets, and cmd.exe syntax."
+        "Executes a bash/sh command and returns its output. On Windows this uses a real "
+        "Git/MSYS Bash and never cmd.exe; prefer PowerShell for Windows paths, file "
+        "operations, cmdlets, and cmd.exe syntax."
     )
     access = ToolAccess.WRITE
     concurrency = ToolConcurrency.BLOCKING
@@ -60,7 +121,10 @@ class BashTool(BaseTool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The bash/sh command to execute; do not use Windows cmd.exe or PowerShell syntax here",
+                    "description": (
+                        "The bash/sh command to execute; on Windows it requires Git/MSYS Bash "
+                        "and is never interpreted by cmd.exe"
+                    ),
                 },
                 "timeout": {
                     "type": "number",
@@ -83,12 +147,29 @@ class BashTool(BaseTool):
             process_options: dict[str, Any] = {"stdin": subprocess.DEVNULL}
             if os.name == "nt":
                 process_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+                invocation = _windows_bash_invocation(command, _find_windows_bash())
+                if invocation is None:
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=(
+                            "A real Bash executable is not available on Windows, so the command "
+                            "was not run. Install Git for Windows or use the PowerShell tool. "
+                            "Coomi will not pass Bash syntax to cmd.exe because flags such as "
+                            "'mkdir -p' can otherwise be interpreted as directory names."
+                        ),
+                    )
+                use_shell = False
+            else:
+                invocation = command
+                use_shell = True
             result = subprocess.run(
-                command,
-                shell=True,
+                invocation,
+                shell=use_shell,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                cwd=cwd,
                 **process_options,
             )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.widget import Widget
@@ -39,6 +40,7 @@ class CustomHeader(Widget):
         self._home_start = 0
         self._home_end = 0
         self._setting_start = 0
+        self._setting_end = 0
         self._display_path = ""
         self._is_selecting_path = False
         self._selection_start: int | None = None
@@ -49,29 +51,36 @@ class CustomHeader(Widget):
         title = self.TITLE
         home = self.HOME
         setting = self.SETTING
-        nav_width = len(home) + self.HOME_SETTING_GAP + len(setting)
+        home_width = cell_len(home)
+        setting_width = cell_len(setting)
+        nav_width = home_width + self.HOME_SETTING_GAP + setting_width
+        title_width = cell_len(title)
 
         if width <= nav_width + 2:
             title = ""
-        elif width < len(title) + nav_width + 1:
-            title = title[:max(0, width - nav_width - 1)]
+            title_width = 0
+        elif width < title_width + nav_width + 1:
+            title = _prefix_by_cells(title, max(0, width - nav_width - 1))
+            title_width = cell_len(title)
 
         path_budget = max(
             0,
             width
-            - len(title)
+            - title_width
             - self.TITLE_PATH_GAP
             - self.PATH_SETTING_GAP
             - nav_width,
         )
         full_path = self._current_path()
         display_path = _middle_ellipsis(full_path, path_budget)
+        display_path_width = cell_len(display_path)
 
-        self._path_start = len(title) + self.TITLE_PATH_GAP
-        self._path_end = self._path_start + len(display_path)
-        self._setting_start = max(0, width - len(setting))
-        self._home_start = max(0, self._setting_start - self.HOME_SETTING_GAP - len(home))
-        self._home_end = self._home_start + len(home)
+        self._path_start = title_width + self.TITLE_PATH_GAP
+        self._path_end = self._path_start + display_path_width
+        self._setting_start = max(0, width - setting_width)
+        self._setting_end = min(width, self._setting_start + setting_width)
+        self._home_start = max(0, self._setting_start - self.HOME_SETTING_GAP - home_width)
+        self._home_end = min(width, self._home_start + home_width)
         self._display_path = display_path
 
         between_path_and_nav = max(1, self._home_start - self._path_end)
@@ -135,12 +144,13 @@ class CustomHeader(Widget):
         if self._home_start <= event.x < self._home_end:
             event.stop()
             self.app.action_go_home()
-        elif event.x >= self._setting_start:
+        elif self._setting_start <= event.x < self._setting_end:
             event.stop()
             self.app.action_open_settings()
 
     def _path_rel(self, x: int) -> int:
-        return max(0, min(x - self._path_start, len(self._display_path)))
+        relative_cell = max(0, min(x - self._path_start, cell_len(self._display_path)))
+        return _cell_offset_to_index(self._display_path, relative_cell)
 
     def get_selected_text(self) -> str | None:
         if not self.has_selection():
@@ -168,12 +178,57 @@ class CustomHeader(Widget):
 def _middle_ellipsis(value: str, max_width: int) -> str:
     if max_width <= 0:
         return ""
-    if len(value) <= max_width:
+    if cell_len(value) <= max_width:
         return value
     if max_width <= 3:
         return "." * max_width
     marker = "..."
-    keep = max_width - len(marker)
-    left = max(1, keep // 2)
-    right = max(1, keep - left)
-    return value[:left] + marker + value[-right:]
+    keep = max_width - cell_len(marker)
+    left_width = max(1, keep // 2)
+    right_width = max(1, keep - left_width)
+    return (
+        _prefix_by_cells(value, left_width)
+        + marker
+        + _suffix_by_cells(value, right_width)
+    )
+
+
+def _prefix_by_cells(value: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    used = 0
+    chars: list[str] = []
+    for char in value:
+        char_width = cell_len(char)
+        if used + char_width > max_width:
+            break
+        chars.append(char)
+        used += char_width
+    return "".join(chars)
+
+
+def _suffix_by_cells(value: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    used = 0
+    chars: list[str] = []
+    for char in reversed(value):
+        char_width = cell_len(char)
+        if used + char_width > max_width:
+            break
+        chars.append(char)
+        used += char_width
+    return "".join(reversed(chars))
+
+
+def _cell_offset_to_index(value: str, offset: int) -> int:
+    target = max(0, offset)
+    used = 0
+    for index, char in enumerate(value):
+        char_width = cell_len(char)
+        if used + char_width > target:
+            return index
+        used += char_width
+        if used == target:
+            return index + 1
+    return len(value)
