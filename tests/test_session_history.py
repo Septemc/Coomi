@@ -5,8 +5,20 @@ import re
 from pathlib import Path
 
 from coomi.engine.session import SessionManager, add_assistant_message, add_tool_result, add_user_message
-from coomi.services.llm.config import PRESET_PROVIDERS, ProviderConfig
-from coomi.services.session_history import list_session_records, load_session_from_jsonl
+from coomi.services.llm.config import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_COMPATIBLE,
+    OPENAI_RESPONSES,
+    PRESET_PROVIDERS,
+    PROVIDER_TYPE_LABELS,
+    ProviderConfig,
+    normalize_provider_type,
+)
+from coomi.services.session_history import (
+    delete_session_record,
+    list_session_records,
+    load_session_from_jsonl,
+)
 from coomi.types import ToolCall
 
 
@@ -75,7 +87,7 @@ def test_session_history_preserves_tool_call_source(tmp_path):
     assert loaded.messages[0].tool_calls[0].source == "text_fallback"
 
 
-def test_legacy_deepseek_type_is_normalized_to_generic():
+def test_legacy_deepseek_type_is_normalized_to_openai_compatible():
     provider = ProviderConfig.from_dict(
         "deepseek",
         {
@@ -87,7 +99,28 @@ def test_legacy_deepseek_type_is_normalized_to_generic():
         },
     )
 
-    assert provider.type == "generic"
+    assert provider.type == OPENAI_COMPATIBLE
+
+
+def test_provider_compatibility_modes_have_only_three_user_facing_names():
+    assert list(PROVIDER_TYPE_LABELS.values()) == [
+        "OpenAI Compatible",
+        "OpenAI Responses",
+        "Anthropic Messages",
+    ]
+    assert normalize_provider_type("generic") == OPENAI_COMPATIBLE
+    assert normalize_provider_type("OpenAI Responses") == OPENAI_RESPONSES
+    assert normalize_provider_type("anthropic") == ANTHROPIC_MESSAGES
+
+
+def test_delete_session_record_removes_only_selected_history_file(tmp_path):
+    manager = SessionManager(history_dir=tmp_path)
+    session = manager.create_session(system_prompt="sys")
+    history_path = Path(session.history_path)
+
+    assert delete_session_record(history_path) is True
+    assert not history_path.exists()
+    assert delete_session_record(history_path) is False
 
 
 def test_provider_tool_protocol_auto_infers_text_modes():
@@ -134,9 +167,9 @@ def test_deepseek_presets_cover_openai_and_anthropic_compatible_modes():
     openai_preset = PRESET_PROVIDERS["deepseek-openai"]
     anthropic_preset = PRESET_PROVIDERS["deepseek-anthropic"]
 
-    assert openai_preset["type"] == "generic"
+    assert openai_preset["type"] == OPENAI_COMPATIBLE
     assert openai_preset["base_url"] == "https://api.deepseek.com"
     assert openai_preset["tool_protocol"] == "structured"
-    assert anthropic_preset["type"] == "anthropic"
+    assert anthropic_preset["type"] == ANTHROPIC_MESSAGES
     assert anthropic_preset["base_url"] == "https://api.deepseek.com/anthropic"
     assert anthropic_preset["tool_protocol"] == "native"

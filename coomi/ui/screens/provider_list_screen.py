@@ -12,7 +12,7 @@ from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from ...services.llm.config import ConfigManager, ProviderConfig
+from ...services.llm.config import ConfigManager, ProviderConfig, provider_type_label
 
 
 class ProviderListScreen(ModalScreen[Optional[dict]]):
@@ -52,11 +52,11 @@ class ProviderListScreen(ModalScreen[Optional[dict]]):
 
             if is_sel:
                 lines.append(
-                    f"[bold reverse] ● {p.id}: {p.display} ({p.type}){fast_info}{active_marker} [/bold reverse]"
+                    f"[bold reverse] ● {p.id}: {p.display} ({provider_type_label(p.type)}){fast_info}{active_marker} [/bold reverse]"
                 )
             else:
                 lines.append(
-                    f"  [cyan]○[/cyan] {p.id}: {p.display} ({p.type}){fast_info}{active_marker}"
+                    f"  [cyan]○[/cyan] {p.id}: {p.display} ({provider_type_label(p.type)}){fast_info}{active_marker}"
                 )
 
         # 新增选项

@@ -26,6 +26,7 @@ class StatusPanel(Widget):
         super().__init__(*args, **kwargs)
         self._sl = status_line
         self._mode: str = "idle"       # "idle" | "executing" | "compressing" | "plan" | "question" | "loop"
+        self._special_mode: str | None = None  # persistent "plan" / "loop" badge
         self._spinner_char: str = ""
         self._tool_name: str | None = None
         self._compress_info: str = ""
@@ -46,21 +47,27 @@ class StatusPanel(Widget):
         self.refresh()
 
     def set_idle(self) -> None:
-        self._mode = "idle"
+        self._mode = "plan" if self._special_mode == "plan" else "idle"
         self._tool_name = None
         self._compress_info = ""
         self._spinner_char = ""
         self._exit_pending = False
-        self._loop_step = 0
-        self._loop_total = 0
+        if self._special_mode != "loop":
+            self._loop_step = 0
+            self._loop_total = 0
         self.refresh()
 
     def set_plan_mode(self, active: bool) -> None:
         """设置 Plan Mode 状态"""
         if active:
-            self._mode = "plan"
+            self._special_mode = "plan"
+            if self._mode == "idle":
+                self._mode = "plan"
         else:
-            self._mode = "idle"
+            if self._special_mode == "plan":
+                self._special_mode = None
+            if self._mode == "plan":
+                self._mode = "idle"
         self.refresh()
 
     def set_question_mode(self) -> None:
@@ -70,10 +77,31 @@ class StatusPanel(Widget):
 
     def set_loop_progress(self, current_step: int, total_steps: int) -> None:
         """设置 Loop 模式进度"""
+        self._special_mode = "loop"
         self._mode = "loop"
         self._loop_step = current_step
         self._loop_total = total_steps
         self.refresh()
+
+    def set_loop_mode(self, active: bool, total_steps: int = 0) -> None:
+        """Show or clear the persistent Loop Mode badge."""
+        if active:
+            self._special_mode = "loop"
+            self._mode = "loop"
+            self._loop_step = 0
+            self._loop_total = total_steps
+        else:
+            if self._special_mode == "loop":
+                self._special_mode = None
+            if self._mode == "loop":
+                self._mode = "idle"
+            self._loop_step = 0
+            self._loop_total = 0
+        self.refresh()
+
+    @property
+    def special_mode(self) -> str | None:
+        return self._special_mode
 
     def set_spinner(self, char: str) -> None:
         self._spinner_char = char
@@ -92,7 +120,7 @@ class StatusPanel(Widget):
     def render(self):
         from rich.table import Table
 
-        table = Table.grid(padding=(0, 0))
+        table = Table.grid(padding=(0, 0), expand=True)
         table.add_column(ratio=1)
         width = max(40, self.size.width or 100)
 
@@ -150,9 +178,23 @@ class StatusPanel(Widget):
         else:
             bottom = "[dim]Ready[/dim]"
 
-        table.add_row(top)
+        top_row = Table.grid(padding=(0, 0), expand=True)
+        top_row.add_column(ratio=1)
+        top_row.add_column(justify="right", no_wrap=True)
+        top_row.add_row(top, self._mode_badge())
+        table.add_row(top_row)
         table.add_row(bottom)
         return table
+
+    def _mode_badge(self) -> str:
+        if self._special_mode == "plan":
+            return "[bold black on #d4a72c] PLAN MODE [/bold black on #d4a72c]"
+        if self._special_mode == "loop":
+            progress = ""
+            if self._loop_total:
+                progress = f" {self._loop_step}/{self._loop_total}"
+            return f"[bold black on #3fb950] LOOP MODE{progress} [/bold black on #3fb950]"
+        return ""
 
 
 def _truncate(value: str, max_len: int) -> str:

@@ -24,7 +24,12 @@ from coomi.ui.widgets.custom_header import CustomHeader
 from coomi.ui.widgets.selectable_rich_log import SelectableRichLog, _slice_text_cells
 from coomi.ui.widgets.plan_panel import PlanPanel
 from coomi.ui.widgets.prompt_text_area import PromptTextArea
-from coomi.ui.widgets.welcome_panel import WelcomePanel
+from coomi.ui.widgets.status_panel import StatusPanel
+from coomi.ui.widgets.welcome_panel import (
+    SESSION_ACTION_DELETE,
+    SESSION_ACTION_SELECT,
+    WelcomePanel,
+)
 from coomi.ui.terminal_capabilities import supports_modified_enter
 from coomi.services.llm.config import ProviderConfig
 
@@ -433,6 +438,55 @@ def test_welcome_panel_mentions_direct_paste_auto_configuration():
     assert "Skill 链接/本地路径" in rendered
     assert "MCP JSON/URL/stdio" in rendered
     assert "自动配置、测试并注册工具" in rendered
+
+
+def test_welcome_panel_uses_left_right_for_select_and_delete(tmp_path):
+    from datetime import datetime
+
+    from coomi.services.session_history import SessionHistoryRecord
+
+    panel = WelcomePanel()
+    panel.set_context(
+        "demo-model",
+        12,
+        [
+            SessionHistoryRecord(
+                path=tmp_path / "coomi-demo.jsonl",
+                session_id="demo",
+                title="Demo session",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                message_count=2,
+            )
+        ],
+    )
+
+    assert panel.selected_session_action == SESSION_ACTION_SELECT
+    panel.move_session_action(1)
+    assert panel.selected_session_action == SESSION_ACTION_DELETE
+    panel.move_session_action(-1)
+    assert panel.selected_session_action == SESSION_ACTION_SELECT
+
+
+def test_status_panel_shows_persistent_mode_badge_on_top_row():
+    status = StatusPanel(StatusLine())
+    status.set_plan_mode(True)
+    status.set_executing()
+    console = Console(record=True, width=120)
+
+    console.print(status.render())
+    rendered = console.export_text()
+
+    assert "PLAN MODE" in rendered.splitlines()[0]
+    status.set_idle()
+    assert status.special_mode == "plan"
+
+    status.set_plan_mode(False)
+    status.set_loop_mode(True, total_steps=3)
+    status.set_loop_progress(2, 3)
+    loop_console = Console(record=True, width=120)
+    loop_console.print(status.render())
+    assert "LOOP MODE 2/3" in loop_console.export_text().splitlines()[0]
 
 
 def test_settings_screen_guide_explains_llm_skill_and_mcp_usage():

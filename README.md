@@ -8,7 +8,7 @@
 
 - **纯净 Agent 设计** — 以开发学习为目标，流程透明，模块边界清晰，便于观察、复盘和二次改造。
 - **核心能力完整** — 覆盖文件操作、搜索、Shell、网页、任务、子 Agent 、 Plan 模式和Loop模式等基础工具链。
-- **可切换的 LLM Provider** — 支持 DeepSeek、OpenAI、Anthropic 和兼容 OpenAI API 的通用服务。
+- **可切换的 LLM Provider** — 统一支持 OpenAI Compatible、OpenAI Responses、Anthropic Messages 三种兼容模式。
 - **上下文与记忆机制** — 提供上下文压缩、记忆管理、语义召回和工具结果缓存等基础工程能力。
 - **流式终端界面** — 基于 Textual 的 TUI，支持流式输出、工具调用提示和状态信息展示。
 - **精选扩展中心** — 在终端内浏览、安装、更新和卸载精选 Skill，并配置和测试热门 MCP Server。
@@ -149,7 +149,7 @@ coomi
 }
 ```
 
-支持的 Provider 类型：`deepseek`、`openai`、`anthropic`、`generic`（任意兼容 OpenAI API 的服务）。
+支持的兼容模式：`OpenAI Compatible`（最常用）、`OpenAI Responses`（GPT 专用）和 `Anthropic Messages`。旧配置中的 `generic`、`openai`、`anthropic`、`deepseek` 会继续自动兼容。
 
 ### 运行方式
 
@@ -193,7 +193,7 @@ coomi/                          # 主包
 │   │   ├── provider.py         # LLMProvider 抽象基类
 │   │   ├── generic.py          # GenericOpenAIProvider（配置驱动）
 │   │   ├── deepseek.py         # DeepSeekProvider（thinking mode）
-│   │   ├── openai.py           # OpenAIProvider
+│   │   ├── openai.py           # OpenAIResponsesProvider
 │   │   ├── anthropic.py        # AnthropicProvider（可选依赖）
 │   │   ├── factory.py          # Provider 工厂 + Flash 模型降级
 │   │   └── config.py           # ConfigManager（~/.coomi/config/providers.json）

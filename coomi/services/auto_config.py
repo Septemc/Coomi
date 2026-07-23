@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .llm.config import ConfigManager, ProviderConfig, TOOL_PROTOCOLS
+from .llm.config import (
+    ConfigManager,
+    ProviderConfig,
+    TOOL_PROTOCOLS,
+    normalize_provider_type,
+)
 from .mcp import McpManager
 from .skills.installer import (
     SkillInstallError,
@@ -381,9 +386,7 @@ def normalize_provider_config(data: dict[str, Any]) -> ProviderConfig:
     if protocol not in TOOL_PROTOCOLS:
         raise ValueError(f"tool_protocol must be one of {sorted(TOOL_PROTOCOLS)}")
 
-    provider_type = str(normalized.get("type") or "generic").strip().casefold()
-    if provider_type == "deepseek":
-        provider_type = "generic"
+    provider_type = normalize_provider_type(normalized.get("type") or "generic")
     return ProviderConfig(
         id=provider_id,
         type=provider_type,

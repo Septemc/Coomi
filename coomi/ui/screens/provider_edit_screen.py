@@ -11,12 +11,23 @@ from textual.binding import Binding
 from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Select, Static
+from textual.widgets.select import NoSelection
 
-from ...services.llm.config import ConfigManager, ProviderConfig, PRESET_PROVIDERS, TOOL_PROTOCOLS
+from ...services.llm.config import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_COMPATIBLE,
+    OPENAI_RESPONSES,
+    PROVIDER_TYPE_OPTIONS,
+    ConfigManager,
+    ProviderConfig,
+    PRESET_PROVIDERS,
+    TOOL_PROTOCOLS,
+    normalize_provider_type,
+)
 
 FIELD_DEFS = [
     ("id", "Provider ID", "唯一标识，如 my-provider"),
-    ("type", "类型 (generic/openai/anthropic)", "generic"),
+    ("type", "兼容模式", "OpenAI Compatible"),
     ("tool_protocol", "Tool protocol (auto/native/structured/mimo/disabled)", "auto"),
     ("display", "显示名称", "如 DeepSeek V4"),
     ("api_key", "API Key", "sk-xxx"),
@@ -31,8 +42,9 @@ FIELD_HELP = {
         "编辑时修改 ID 会迁移配置；如果它是当前 Provider，保存后会同步切换到新 ID。"
     ),
     "type": (
-        "[bold]接口类型[/bold]\ngeneric：OpenAI-compatible 通用接口；openai：OpenAI 原生接口；"
-        "anthropic：Anthropic Messages 兼容接口。品牌名称不一定等于协议类型。"
+        "[bold]兼容模式[/bold]\nOpenAI Compatible：最常用的 Chat Completions 兼容接口；"
+        "OpenAI Responses：专门用于 GPT 的 Responses API；"
+        "Anthropic Messages：Anthropic Messages 兼容接口。界面只提供这三种模式。"
     ),
     "tool_protocol": (
         "[bold]Tool protocol[/bold]\nauto：自动判断（推荐）；native：服务端原生 tool/function calling；"
@@ -60,7 +72,7 @@ FIELD_HELP = {
 
 # 预设选项列表
 PRESET_OPTIONS = [
-    (preset_id, f"{data['display']} ({preset_id})")
+    (f"{data['display']} ({preset_id})", preset_id)
     for preset_id, data in PRESET_PROVIDERS.items()
 ]
 
@@ -71,7 +83,6 @@ class ProviderEditScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+s", "save", "Save", priority=True),
-        Binding("enter", "save", "Save", priority=True),
     ]
 
     def __init__(self, config_mgr: ConfigManager, provider: ProviderConfig | None = None, **kwargs):
@@ -83,7 +94,7 @@ class ProviderEditScreen(ModalScreen[bool]):
         if provider:
             self._init_values = {
                 "id": provider.id,
-                "type": provider.type,
+                "type": normalize_provider_type(provider.type),
                 "tool_protocol": provider.tool_protocol,
                 "display": provider.display,
                 "api_key": provider.api_key,
@@ -94,7 +105,7 @@ class ProviderEditScreen(ModalScreen[bool]):
         else:
             self._init_values = {
                 "id": "",
-                "type": "generic",
+                "type": OPENAI_COMPATIBLE,
                 "tool_protocol": "auto",
                 "display": "",
                 "api_key": "",
@@ -112,7 +123,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             if not self._editing:
                 yield Static("  [dim]从预设创建（可选）:[/dim]")
                 yield Select(
-                    options=[("", "--- 选择预设 ---")] + PRESET_OPTIONS,
+                    options=[("--- 选择预设 ---", "")] + PRESET_OPTIONS,
                     id="preset-select",
                     allow_blank=True,
                 )
@@ -122,12 +133,20 @@ class ProviderEditScreen(ModalScreen[bool]):
                 for key, label, hint in FIELD_DEFS:
                     value = self._init_values.get(key, "")
                     yield Static(f"  [dim]{label}:[/dim]")
-                    yield Input(
-                        value=value,
-                        placeholder=hint,
-                        password=(key == "api_key"),
-                        id=f"field-{key}",
-                    )
+                    if key == "type":
+                        yield Select(
+                            options=[(label, provider_type) for provider_type, label in PROVIDER_TYPE_OPTIONS],
+                            value=normalize_provider_type(value),
+                            allow_blank=False,
+                            id="field-type",
+                        )
+                    else:
+                        yield Input(
+                            value=value,
+                            placeholder=hint,
+                            password=(key == "api_key"),
+                            id=f"field-{key}",
+                        )
                 yield Static("")
                 yield Static("  [dim]Tab 切换字段  Ctrl+S 保存  Esc 取消[/dim]")
             yield Static(FIELD_HELP["preset"], id="provider-field-help")
@@ -147,12 +166,15 @@ class ProviderEditScreen(ModalScreen[bool]):
 
     @on(Input.Submitted)
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """阻止 Input 的 Submitted 事件传播，避免触发 Screen 的 Enter 绑定"""
+        """Enter saves from text fields while Select keeps its native Enter behavior."""
         event.stop()
+        self.action_save()
 
     @on(Select.Changed)
     def on_preset_selected(self, event: Select.Changed) -> None:
         """预设选择变更时自动填充字段"""
+        if event.select.id != "preset-select":
+            return
         if event.value == "":
             return
         preset_id = event.value
@@ -163,7 +185,7 @@ class ProviderEditScreen(ModalScreen[bool]):
         # 自动填充字段
         fields_to_fill = {
             "id": preset_id,
-            "type": preset.get("type", "generic"),
+            "type": normalize_provider_type(preset.get("type", OPENAI_COMPATIBLE)),
             "tool_protocol": preset.get("tool_protocol", "auto"),
             "display": preset.get("display", ""),
             "base_url": preset.get("base_url", ""),
@@ -172,8 +194,11 @@ class ProviderEditScreen(ModalScreen[bool]):
         }
         for key, value in fields_to_fill.items():
             try:
-                inp = self.query_one(f"#field-{key}", Input)
-                inp.value = value
+                if key == "type":
+                    self.query_one("#field-type", Select).value = value
+                else:
+                    inp = self.query_one(f"#field-{key}", Input)
+                    inp.value = value
             except Exception:
                 pass
 
@@ -183,8 +208,12 @@ class ProviderEditScreen(ModalScreen[bool]):
         values = {}
         for key, _, _ in FIELD_DEFS:
             try:
-                inp = self.query_one(f"#field-{key}", Input)
-                values[key] = inp.value.strip()
+                if key == "type":
+                    selected = self.query_one("#field-type", Select).value
+                    values[key] = "" if isinstance(selected, NoSelection) else str(selected)
+                else:
+                    inp = self.query_one(f"#field-{key}", Input)
+                    values[key] = inp.value.strip()
             except Exception:
                 values[key] = self._init_values.get(key, "")
 
@@ -198,11 +227,11 @@ class ProviderEditScreen(ModalScreen[bool]):
         if not values.get("model"):
             self._show_error("模型名不能为空")
             return
-        provider_type = (values.get("type") or "generic").lower()
-        if provider_type == "deepseek":
-            provider_type = "generic"
-        if provider_type not in {"generic", "openai", "anthropic"}:
-            self._show_error("类型只能是 generic / openai / anthropic")
+        provider_type = normalize_provider_type(values.get("type") or OPENAI_COMPATIBLE)
+        if provider_type not in {OPENAI_COMPATIBLE, OPENAI_RESPONSES, ANTHROPIC_MESSAGES}:
+            self._show_error(
+                "兼容模式只能是 OpenAI Compatible / OpenAI Responses / Anthropic Messages"
+            )
             return
 
         tool_protocol = (values.get("tool_protocol") or "auto").lower().replace("-", "_")

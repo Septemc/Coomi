@@ -1,7 +1,14 @@
 """LLM Provider 工厂 — 基于 ConfigManager 的多 Provider 管理"""
 from __future__ import annotations
 
-from .config import ConfigManager, ProviderConfig
+from .config import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_COMPATIBLE,
+    OPENAI_RESPONSES,
+    ConfigManager,
+    ProviderConfig,
+    normalize_provider_type,
+)
 from .provider import LLMProvider
 
 
@@ -33,15 +40,15 @@ def get_llm_provider(provider_id: str | None = None) -> LLMProvider:
 
 def _create_from_config(config: ProviderConfig) -> LLMProvider:
     """根据 ProviderConfig 创建对应的 Provider 实例"""
-    t = config.type.lower()
+    t = normalize_provider_type(config.type)
 
-    if t == "deepseek":
+    if t == OPENAI_COMPATIBLE:
         from .generic import GenericOpenAIProvider
         return GenericOpenAIProvider(config)
-    elif t == "openai":
-        from .openai import OpenAIProvider
-        return OpenAIProvider(config)
-    elif t == "anthropic":
+    elif t == OPENAI_RESPONSES:
+        from .openai import OpenAIResponsesProvider
+        return OpenAIResponsesProvider(config)
+    elif t == ANTHROPIC_MESSAGES:
         try:
             from .anthropic import AnthropicProvider
             return AnthropicProvider(config)

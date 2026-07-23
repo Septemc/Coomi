@@ -21,7 +21,7 @@ SETTINGS_GUIDE = {
         "[bold]完整流程[/bold]\n"
         "1. 进入“新增/修改模型API配置”。\n"
         "2. 选择新增 Provider 或编辑已有 Provider。\n"
-        "3. 填写显示名称、接口类型、Base URL、模型名和 API Key。\n"
+        "3. 选择 OpenAI Compatible、OpenAI Responses 或 Anthropic Messages，再填写显示名称、Base URL、模型名和 API Key。\n"
         "4. tool_protocol 可选 auto/native/structured/mimo/disabled；不确定时用 auto。\n"
         "5. 保存后返回主界面，直接继续对话；需要切换多个 Provider 时再使用 /model。\n"
     ),

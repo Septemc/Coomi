@@ -120,6 +120,22 @@ def list_session_records(
     return records[:limit]
 
 
+def delete_session_record(path: str | Path) -> bool:
+    """Delete one persisted Coomi session selected by the user."""
+    source = Path(path)
+    if source.suffix.casefold() != ".jsonl":
+        return False
+    if not source.name.startswith(f"{SESSION_FILENAME_PREFIX}-"):
+        return False
+    try:
+        source.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
 def load_session_from_jsonl(path: str | Path) -> Session:
     source = Path(path)
     metadata: dict[str, Any] = {}

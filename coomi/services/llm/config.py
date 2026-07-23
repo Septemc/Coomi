@@ -6,10 +6,53 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+OPENAI_COMPATIBLE = "openai_compatible"
+OPENAI_RESPONSES = "openai_responses"
+ANTHROPIC_MESSAGES = "anthropic_messages"
+
+PROVIDER_TYPE_LABELS: dict[str, str] = {
+    OPENAI_COMPATIBLE: "OpenAI Compatible",
+    OPENAI_RESPONSES: "OpenAI Responses",
+    ANTHROPIC_MESSAGES: "Anthropic Messages",
+}
+
+PROVIDER_TYPE_OPTIONS: tuple[tuple[str, str], ...] = tuple(
+    (provider_type, label)
+    for provider_type, label in PROVIDER_TYPE_LABELS.items()
+)
+
+def normalize_provider_type(value: object) -> str:
+    """Normalize a compatibility mode while accepting old configuration values."""
+    raw = str(value or OPENAI_COMPATIBLE).strip().casefold()
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "generic": OPENAI_COMPATIBLE,
+        "deepseek": OPENAI_COMPATIBLE,
+        "openai_compatible": OPENAI_COMPATIBLE,
+        "openai_compat": OPENAI_COMPATIBLE,
+        "chat_completions": OPENAI_COMPATIBLE,
+        "openai": OPENAI_RESPONSES,
+        "responses": OPENAI_RESPONSES,
+        "response": OPENAI_RESPONSES,
+        "openai_response": OPENAI_RESPONSES,
+        "openai_responses": OPENAI_RESPONSES,
+        "anthropic": ANTHROPIC_MESSAGES,
+        "anthropic_message": ANTHROPIC_MESSAGES,
+        "anthropic_messages": ANTHROPIC_MESSAGES,
+        "messages": ANTHROPIC_MESSAGES,
+    }
+    return aliases.get(normalized, OPENAI_COMPATIBLE)
+
+
+def provider_type_label(value: object) -> str:
+    """Return one of the three user-facing compatibility mode names."""
+    canonical = normalize_provider_type(value)
+    return PROVIDER_TYPE_LABELS.get(canonical, PROVIDER_TYPE_LABELS[OPENAI_COMPATIBLE])
+
 # 预设 Provider 配置 — 用户可通过 UI 快速创建
 PRESET_PROVIDERS: dict[str, dict] = {
     "deepseek-openai": {
-        "type": "generic",
+        "type": OPENAI_COMPATIBLE,
         "display": "DeepSeek (OpenAI compatible)",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-chat",
@@ -17,7 +60,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "tool_protocol": "structured",
     },
     "deepseek-anthropic": {
-        "type": "anthropic",
+        "type": ANTHROPIC_MESSAGES,
         "display": "DeepSeek (Anthropic compatible)",
         "base_url": "https://api.deepseek.com/anthropic",
         "model": "deepseek-chat",
@@ -25,7 +68,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "tool_protocol": "native",
     },
     "mimo-openai": {
-        "type": "generic",
+        "type": OPENAI_COMPATIBLE,
         "display": "MIMO V2.5 Pro (OpenAI)",
         "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "model": "MiMo-V2.5-Pro",
@@ -33,7 +76,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "tool_protocol": "mimo",
     },
     "mimo-anthropic": {
-        "type": "anthropic",
+        "type": ANTHROPIC_MESSAGES,
         "display": "MIMO V2.5 Pro (Anthropic)",
         "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
         "model": "MiMo-V2.5-Pro",
@@ -41,7 +84,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "tool_protocol": "mimo",
     },
     "minimax-openai": {
-        "type": "generic",
+        "type": OPENAI_COMPATIBLE,
         "display": "MiniMax M2.7 (OpenAI)",
         "base_url": "https://api.minimaxi.com/v1",
         "model": "MiniMax-M2.7",
@@ -49,7 +92,7 @@ PRESET_PROVIDERS: dict[str, dict] = {
         "tool_protocol": "native",
     },
     "minimax-anthropic": {
-        "type": "anthropic",
+        "type": ANTHROPIC_MESSAGES,
         "display": "MiniMax M2.7 (Anthropic)",
         "base_url": "https://api.minimaxi.com/anthropic",
         "model": "MiniMax-M2.7",
@@ -65,7 +108,7 @@ TOOL_PROTOCOLS = {"auto", "native", "structured", "mimo", "disabled"}
 class ProviderConfig:
     """单个 Provider 配置"""
     id: str
-    type: str  # generic / openai / anthropic; deepseek is accepted as a legacy alias
+    type: str  # three compatibility modes plus accepted legacy aliases
     display: str
     api_key: str
     model: str
@@ -73,11 +116,12 @@ class ProviderConfig:
     fast_model: str | None = None
     tool_protocol: str = "auto"
 
+    def __post_init__(self) -> None:
+        self.type = normalize_provider_type(self.type)
+
     @classmethod
     def from_dict(cls, provider_id: str, data: dict) -> ProviderConfig:
-        provider_type = str(data.get("type", "generic")).lower()
-        if provider_type == "deepseek":
-            provider_type = "generic"
+        provider_type = normalize_provider_type(data.get("type", OPENAI_COMPATIBLE))
         tool_protocol = _normalize_tool_protocol(data.get("tool_protocol", "auto"))
         return cls(
             id=provider_id,
@@ -123,9 +167,14 @@ class ProviderConfig:
             return "mimo"
         if "minimax" in fingerprint or "minimaxi" in fingerprint:
             return "native"
-        if self.type in {"openai", "anthropic"}:
+        provider_type = normalize_provider_type(self.type)
+        if provider_type in {OPENAI_RESPONSES, ANTHROPIC_MESSAGES}:
             return "native"
         return "structured"
+
+    @property
+    def type_label(self) -> str:
+        return provider_type_label(self.type)
 
     def text_tool_mode(self) -> str:
         protocol = self.resolved_tool_protocol()
@@ -185,15 +234,16 @@ class ConfigManager:
         from dotenv import load_dotenv
 
         load_dotenv(Path.cwd() / ".env")  # 不加 override，避免覆盖系统环境变量
-        provider_type = os.getenv("LLM_PROVIDER", "generic").lower()
+        raw_provider_type = os.getenv("LLM_PROVIDER", OPENAI_COMPATIBLE).lower()
+        provider_type = normalize_provider_type(raw_provider_type)
 
-        if provider_type == "deepseek":
+        if raw_provider_type == "deepseek":
             data = {
                 "version": 1,
                 "active": "default",
                 "providers": {
                     "default": {
-                        "type": "generic",
+                        "type": OPENAI_COMPATIBLE,
                         "display": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
                         "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
                         "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
@@ -202,26 +252,26 @@ class ConfigManager:
                     }
                 },
             }
-        elif provider_type == "openai":
+        elif provider_type == OPENAI_RESPONSES:
             data = {
                 "version": 1,
                 "active": "default",
                 "providers": {
                     "default": {
-                        "type": "openai",
+                        "type": OPENAI_RESPONSES,
                         "display": os.getenv("OPENAI_MODEL", "gpt-4o"),
                         "api_key": os.getenv("OPENAI_API_KEY", ""),
                         "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
                     }
                 },
             }
-        elif provider_type == "anthropic":
+        elif provider_type == ANTHROPIC_MESSAGES:
             data = {
                 "version": 1,
                 "active": "default",
                 "providers": {
                     "default": {
-                        "type": "anthropic",
+                        "type": ANTHROPIC_MESSAGES,
                         "display": "Claude Sonnet 4",
                         "api_key": os.getenv("ANTHROPIC_API_KEY", ""),
                         "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),

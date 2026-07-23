@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coomi-agent"
-version = "1.1.6"
+version = "1.2.0"
 description = "一款纯净的自主 Agent 系统。"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "openai>=1.6.0",
+    "openai>=1.66.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
     "textual>=1.0.0",

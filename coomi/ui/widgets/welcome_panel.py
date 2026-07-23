@@ -75,6 +75,8 @@ MASCOT_GUIDE_GAP = 2
 WELCOME_BOTTOM_MARGIN = 1
 MASCOT_GUIDE_BOTTOM_GAP = 1
 GUIDE_RAISE_LINES = 4
+SESSION_ACTION_SELECT = "select"
+SESSION_ACTION_DELETE = "delete"
 
 
 class WelcomePanel(Widget):
@@ -94,6 +96,7 @@ class WelcomePanel(Widget):
         self._tool_count = 0
         self._sessions: list[SessionHistoryRecord] = []
         self._selected_session = 0
+        self._selected_session_action = SESSION_ACTION_SELECT
         self._session_scroll = 0
         self._history_x_start = 0
         self._history_item_y_start = 0
@@ -108,8 +111,25 @@ class WelcomePanel(Widget):
         self._model_display = model_display
         self._tool_count = tool_count
         if sessions is not None:
+            kept_selection = False
+            selected_path = None
+            if self._sessions and 0 <= self._selected_session < len(self._sessions):
+                selected_path = self._sessions[self._selected_session].path
             self._sessions = sessions
-            self._selected_session = min(self._selected_session, max(0, len(sessions) - 1))
+            if selected_path is not None:
+                matching_index = next(
+                    (index for index, record in enumerate(sessions) if record.path == selected_path),
+                    None,
+                )
+                if matching_index is not None:
+                    self._selected_session = matching_index
+                    kept_selection = True
+                else:
+                    self._selected_session = min(self._selected_session, max(0, len(sessions) - 1))
+            else:
+                self._selected_session = min(self._selected_session, max(0, len(sessions) - 1))
+            if not sessions or not kept_selection:
+                self._selected_session_action = SESSION_ACTION_SELECT
             self._session_scroll = min(self._session_scroll, self._selected_session)
         self.refresh()
 
@@ -120,14 +140,37 @@ class WelcomePanel(Widget):
         if not self._sessions:
             return
         self._selected_session = (self._selected_session + direction) % len(self._sessions)
+        self._selected_session_action = SESSION_ACTION_SELECT
         self._keep_selected_visible()
         self.refresh()
+
+    def move_session_action(self, direction: int) -> None:
+        """Use left/right to choose Select or Delete for the highlighted session."""
+        if not self._sessions:
+            return
+        self._selected_session_action = (
+            SESSION_ACTION_SELECT if direction < 0 else SESSION_ACTION_DELETE
+        )
+        self.refresh()
+
+    @property
+    def selected_session_action(self) -> str:
+        return self._selected_session_action
 
     def open_selected_session(self) -> None:
         if not self._sessions:
             return
         record = self._sessions[self._selected_session]
         self.app.open_session_from_history(str(record.path))
+
+    def confirm_selected_session(self) -> None:
+        if not self._sessions:
+            return
+        if self._selected_session_action == SESSION_ACTION_DELETE:
+            record = self._sessions[self._selected_session]
+            self.app.delete_session_from_history(str(record.path))
+            return
+        self.open_selected_session()
 
     def render(self):
         width = max(42, self.size.width or 80)
@@ -204,8 +247,8 @@ class WelcomePanel(Widget):
             guide.append("Enter 发送，Shift+Enter 换行。\n")
             guide.append("/model 模型，/context 上下文。\n")
             guide.append("/clear 新会话，↑↓ 选历史。\n")
-            guide.append("历史记录可鼠标/↑↓选择。\n")
-            guide.append("点击/Enter 选中会话。\n")
+            guide.append("↑↓ 选会话，←→ 选中/删除。\n")
+            guide.append("Enter 确定，鼠标点击可打开。\n")
             guide.append("F2 Home，F3 Setting。\n")
             guide.append("Ctrl+P 命令面板。\n")
             guide.append("Shift+Tab 权限，双 Esc 退出。", style="dim")
@@ -217,8 +260,8 @@ class WelcomePanel(Widget):
             guide.append("/model 切换模型，/context 调整上下文窗口。\n")
             guide.append("/permission 查看权限，Shift+Tab 快速切换。\n")
             guide.append("/clear 新建会话，/compact 压缩上下文。\n")
-            guide.append("历史对话记录中鼠标/上下键可以进行选择，\n")
-            guide.append("点击/Enter选中会话。\n")
+            guide.append("历史会话用 ↑↓ 选择，←→ 切换“选中/删除”，\n")
+            guide.append("Enter 确定；鼠标点击会直接打开会话。\n")
             guide.append("Ctrl+P 打开命令面板，F2 返回 Home，F3 打开 Setting。\n")
             guide.append("Ctrl+C 复制选中文本，双击 Esc 退出应用。", style="dim")
         return Panel(
@@ -230,7 +273,7 @@ class WelcomePanel(Widget):
 
     def _render_history_panel(self, width: int, height: int) -> Panel:
         content_height = max(4, height - 2)
-        visible_count = max(1, content_height - 4)
+        visible_count = max(1, content_height - 5)
         self._keep_selected_visible(visible_count)
         records = self._sessions[self._session_scroll : self._session_scroll + visible_count]
         self._history_visible_count = len(records)
@@ -243,9 +286,10 @@ class WelcomePanel(Widget):
                 absolute_index = self._session_scroll + index
                 rows.append(self._render_session_row(record, absolute_index, max(10, width - 4)))
 
-        used_rows = len(rows)
+        used_rows = len(rows) + 1
         spacer = max(0, content_height - used_rows)
         rows.extend(Text("") for _ in range(spacer))
+        rows.append(Text(" ↑↓ 会话  ←→ 选中/删除  Enter 确定", style="dim"))
 
         return Panel(
             Group(*rows),
@@ -256,12 +300,26 @@ class WelcomePanel(Widget):
         )
 
     def _render_session_row(self, record: SessionHistoryRecord, index: int, width: int) -> Text:
+        date = record.updated_at.strftime("%m-%d %H:%M") if record.updated_at else "-- -- --:--"
+        if index == self._selected_session:
+            actions = Text("  ")
+            select_style = "bold black on cyan" if self._selected_session_action == SESSION_ACTION_SELECT else "white on #264f78"
+            delete_style = "bold white on red" if self._selected_session_action == SESSION_ACTION_DELETE else "white on #264f78"
+            actions.append(" 选中 ", style=select_style)
+            actions.append(" ", style="white on #264f78")
+            actions.append(" 删除 ", style=delete_style)
+            base_width = max(13, width - actions.cell_len)
+            title_budget = max(4, base_width - 13)
+            title = _truncate(record.title, title_budget)
+            line = f" {date}  {title}"
+            row = Text(line, style="bold white on #264f78")
+            if row.cell_len < base_width:
+                row.append(" " * (base_width - row.cell_len), style="white on #264f78")
+            row.append_text(actions)
+            return row
         title_budget = max(8, width - 13)
         title = _truncate(record.title, title_budget)
-        date = record.updated_at.strftime("%m-%d %H:%M") if record.updated_at else "-- -- --:--"
         line = f" {date}  {title}"
-        if index == self._selected_session:
-            return Text(line.ljust(width), style="bold white on #264f78")
         return Text(line.ljust(width), style="white")
 
     def on_click(self, event: events.Click) -> None:
@@ -270,6 +328,7 @@ class WelcomePanel(Widget):
         index = event.y - self._history_item_y_start
         if 0 <= index < self._history_visible_count:
             self._selected_session = self._session_scroll + index
+            self._selected_session_action = SESSION_ACTION_SELECT
             self.refresh()
             self.open_selected_session()
             event.stop()

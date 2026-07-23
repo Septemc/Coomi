@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.text import Text
 from textual.widget import Widget
 
-from ...services.llm.config import ProviderConfig
+from ...services.llm.config import ProviderConfig, provider_type_label
 
 
 class ModelPicker(Widget):
@@ -53,7 +53,7 @@ class ModelPicker(Widget):
         for i, p in enumerate(self._providers):
             is_sel = (i == self._selected)
             fast_info = f" (fast: {p.fast_model})" if p.fast_model else ""
-            row_text = f"{p.id}: {p.display} ({p.type}){fast_info}"
+            row_text = f"{p.id}: {p.display} ({provider_type_label(p.type)}){fast_info}"
 
             if is_sel:
                 table.add_row(Text.from_markup(

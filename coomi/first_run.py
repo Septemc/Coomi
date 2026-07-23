@@ -7,6 +7,13 @@ from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt
 
+from .services.llm.config import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_COMPATIBLE,
+    OPENAI_RESPONSES,
+    normalize_provider_type,
+)
+
 console = Console()
 
 # 环境变量映射表
@@ -16,37 +23,42 @@ ENV_MAPPINGS = {
         "base_url": "DEEPSEEK_BASE_URL",
         "model": "DEEPSEEK_MODEL",
     },
-    "openai": {
+    OPENAI_RESPONSES: {
         "api_key": "OPENAI_API_KEY",
         "model": "OPENAI_MODEL",
     },
-    "anthropic": {
+    ANTHROPIC_MESSAGES: {
         "api_key": "ANTHROPIC_API_KEY",
         "model": "ANTHROPIC_MODEL",
+    },
+    OPENAI_COMPATIBLE: {
+        "api_key": "LLM_API_KEY",
+        "base_url": "LLM_BASE_URL",
+        "model": "LLM_MODEL",
     },
 }
 
 PROVIDER_TEMPLATES = {
     "deepseek": {
-        "type": "generic",
+        "type": OPENAI_COMPATIBLE,
         "display": "DeepSeek V4",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-v4-pro",
         "fast_model": "deepseek-v4-flash",
     },
-    "openai": {
-        "type": "openai",
+    OPENAI_RESPONSES: {
+        "type": OPENAI_RESPONSES,
         "display": "GPT-4o",
         "model": "gpt-4o",
     },
-    "anthropic": {
-        "type": "anthropic",
+    ANTHROPIC_MESSAGES: {
+        "type": ANTHROPIC_MESSAGES,
         "display": "Claude Sonnet 4",
         "model": "claude-sonnet-4-20250514",
         "fast_model": "claude-haiku-4-5-20251001",
     },
-    "generic": {
-        "type": "generic",
+    OPENAI_COMPATIBLE: {
+        "type": OPENAI_COMPATIBLE,
         "display": "Custom Provider",
         "model": "",
         "base_url": "",
@@ -76,22 +88,23 @@ def _detect_provider_from_env(env_vars: dict[str, str]) -> str | None:
     # 优先检查 LLM_PROVIDER 环境变量
     provider = env_vars.get("LLM_PROVIDER") or os.getenv("LLM_PROVIDER")
     if provider:
-        return provider.lower()
+        raw_provider = provider.lower()
+        return "deepseek" if raw_provider == "deepseek" else normalize_provider_type(raw_provider)
 
     # 按优先级检测
     if env_vars.get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY"):
         return "deepseek"
     if env_vars.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"):
-        return "openai"
+        return OPENAI_RESPONSES
     if env_vars.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY"):
-        return "anthropic"
+        return ANTHROPIC_MESSAGES
 
     return None
 
 
 def _build_config_from_env(provider_type: str, env_vars: dict[str, str]) -> dict:
     """从环境变量构建配置"""
-    template = PROVIDER_TEMPLATES.get(provider_type, PROVIDER_TEMPLATES["generic"]).copy()
+    template = PROVIDER_TEMPLATES.get(provider_type, PROVIDER_TEMPLATES[OPENAI_COMPATIBLE]).copy()
     mappings = ENV_MAPPINGS.get(provider_type, {})
 
     # 从环境变量填充配置
@@ -143,20 +156,24 @@ def run_first_time_setup() -> bool:
     # Step 2: 交互式配置
     console.print("首次运行需要配置 LLM Provider。\n")
 
-    # 选择 Provider 类型
-    console.print("[bold]支持的 Provider 类型：[/bold]")
-    console.print("  1. [cyan]Generic[/cyan] — 任意兼容 OpenAI API 的服务（DeepSeek/MiMo/MiniMax 等）")
-    console.print("  2. [cyan]OpenAI[/cyan] — GPT-4o 等")
-    console.print("  3. [cyan]Anthropic[/cyan] — Claude 系列")
+    # 选择 API 兼容模式
+    console.print("[bold]支持的 API 兼容模式：[/bold]")
+    console.print("  1. [cyan]OpenAI Compatible[/cyan] — 最常用的 OpenAI 兼容接口")
+    console.print("  2. [cyan]OpenAI Responses[/cyan] — GPT 专用 Responses API")
+    console.print("  3. [cyan]Anthropic Messages[/cyan] — Anthropic Messages 兼容接口")
     console.print()
 
     choice = Prompt.ask(
-        "请选择 Provider 类型",
+        "请选择 API 兼容模式",
         choices=["1", "2", "3"],
         default="1"
     )
 
-    provider_map = {"1": "generic", "2": "openai", "3": "anthropic"}
+    provider_map = {
+        "1": OPENAI_COMPATIBLE,
+        "2": OPENAI_RESPONSES,
+        "3": ANTHROPIC_MESSAGES,
+    }
     provider_type = provider_map[choice]
     template = PROVIDER_TEMPLATES[provider_type].copy()
 
@@ -171,8 +188,8 @@ def run_first_time_setup() -> bool:
         console.print("[red]API Key 不能为空[/red]")
         return False
 
-    # Generic 需要额外配置
-    if provider_type == "generic":
+    # OpenAI Compatible 需要额外配置
+    if provider_type == OPENAI_COMPATIBLE:
         base_url = Prompt.ask("[bold]请输入 Base URL[/bold]")
         model = Prompt.ask("[bold]请输入模型名[/bold]")
         template["base_url"] = base_url

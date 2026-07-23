@@ -31,7 +31,12 @@ from .widgets.custom_header import CustomHeader
 
 from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
-from ..services.session_history import append_session_state, list_session_records, load_session_from_jsonl
+from ..services.session_history import (
+    append_session_state,
+    delete_session_record,
+    list_session_records,
+    load_session_from_jsonl,
+)
 from ..services.llm.factory import get_config_manager
 from ..services.update_check import build_update_prompt_suffix, check_for_update
 from ..services.memory import MemoryManager, MemoryRecall, MemoryType
@@ -105,7 +110,7 @@ def _handle_model_command(config_mgr, status_line: StatusLine, ctx: dict, args: 
         for p in providers:
             marker = " [bold green](active)[/bold green]" if p.id == active_id else ""
             fast_info = f" [dim](fast: {p.fast_model})[/dim]" if p.fast_model else ""
-            lines.append(f"  [bold]{p.id}[/bold]: {p.display} ({p.type}){fast_info}{marker}")
+            lines.append(f"  [bold]{p.id}[/bold]: {p.display} ({p.type_label}){fast_info}{marker}")
         lines.append("[dim]Switch: /model <id>[/dim]")
         return "\n".join(lines)
 
@@ -694,6 +699,24 @@ class CoomiApp(App):
         except Exception:
             pass
 
+    def delete_session_from_history(self, path: str) -> None:
+        """Delete the history entry chosen from the welcome screen and refresh the list."""
+        try:
+            session = load_session_from_jsonl(path)
+        except Exception:
+            session = None
+
+        if not delete_session_record(path):
+            self.notify("会话记录删除失败或已不存在", severity="warning")
+            return
+
+        if session is not None:
+            self._session_mgr.delete_session(session.id)
+        if self._session and self._session.history_path == path:
+            self._session.history_path = None
+        self.notify("会话记录已删除")
+        self._show_welcome_message()
+
     def _render_loaded_session(self, log: RichLog, session: Session) -> None:
         if not session.messages:
             log.write("[dim]Loaded empty session.[/dim]")
@@ -1216,6 +1239,12 @@ class CoomiApp(App):
                     self._loop_mode = False
                     self._loop_session = None
                     self._loop_runner = None
+                    try:
+                        status = self.screen.query_one("#status-panel", StatusPanel)
+                        status.set_loop_mode(False)
+                        status.set_plan_mode(self._plan_mode)
+                    except Exception:
+                        pass
                     self._show_command_result("[red]Loop stopped[/red]")
             return
 
@@ -1257,6 +1286,11 @@ class CoomiApp(App):
             hook_system=self._hook_system,
         )
         self._loop_mode = True
+        try:
+            status = self.screen.query_one("#status-panel", StatusPanel)
+            status.set_loop_mode(True, total_steps=len(spec.steps))
+        except Exception:
+            pass
 
         self._show_command_result(
             f"[bold green]🔁 Loop Mode Started[/bold green]\n"
@@ -1335,6 +1369,8 @@ class CoomiApp(App):
             self._agent_running = False
             self._loop_mode = False
             self._loop_runner = None
+            status.set_loop_mode(False)
+            status.set_plan_mode(self._plan_mode)
             status.set_idle()
             preview.clear_preview()
             if self._loop_session and self._loop_session.status.value == "completed":
@@ -1444,7 +1480,13 @@ class CoomiApp(App):
             return None
 
         if mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
-            if action in ("question_up", "question_down", "question_confirm"):
+            if action in (
+                "question_up",
+                "question_down",
+                "question_left",
+                "question_right",
+                "question_confirm",
+            ):
                 return True
 
         # 问询模式
@@ -1503,13 +1545,17 @@ class CoomiApp(App):
             prompt.action_insert_newline()
 
     async def action_question_left(self) -> None:
-        if self._interactive_mode == "question" and self._plan_panel:
+        if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            self.screen.welcome_panel.move_session_action(-1)
+        elif self._interactive_mode == "question" and self._plan_panel:
             self._plan_panel.prev_question()
         elif self._interactive_mode == "model_picker" and self._model_picker:
             self._model_picker.toggle_mode_left()
 
     async def action_question_right(self) -> None:
-        if self._interactive_mode == "question" and self._plan_panel:
+        if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
+            self.screen.welcome_panel.move_session_action(1)
+        elif self._interactive_mode == "question" and self._plan_panel:
             self._plan_panel.next_question()
         elif self._interactive_mode == "model_picker" and self._model_picker:
             self._model_picker.toggle_mode_right()
@@ -1543,7 +1589,7 @@ class CoomiApp(App):
 
     async def action_question_confirm(self) -> None:
         if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
-            self.screen.welcome_panel.open_selected_session()
+            self.screen.welcome_panel.confirm_selected_session()
             return
 
         # 指令模式 → 执行选中指令
