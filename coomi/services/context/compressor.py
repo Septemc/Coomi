@@ -59,6 +59,18 @@ SUMMARIZE_PROMPT = """请将以下对话历史压缩为结构化摘要。这是�
 ## 9. Optional Next Step
 建议的下一步操作"""
 
+# 压缩后能力提醒（三模式 + 核心工具）
+# 压缩会丢失早期上下文，模型容易"忘记"自己具备的内置能力，
+# 每次压缩后在消息流尾部补一条紧凑提醒，把这些能力重新拉回注意力。
+CAPABILITY_REMINDER_MARKER = "[能力提醒]"
+CAPABILITY_REMINDER = (
+    f"{CAPABILITY_REMINDER_MARKER} 上下文刚被压缩，重申你可用的内置能力：\n"
+    "- Plan 模式：只读探索+设计，先规划再动手；Loop 模式：拆解长线任务分步推进；"
+    "遇到需求歧义或多种可选方案时用 AskUserQuestion 让用户拍板。\n"
+    "- 核心工具：Read/Glob/Grep 读查、Edit/Write 改写、PowerShell/Bash 执行命令、"
+    "WebSearch 查实时信息、Skill/MCP 扩展能力。有专用工具时不要用命令行替代。"
+)
+
 
 class ContextCompressor:
     """上下文压缩器
@@ -118,6 +130,7 @@ class ContextCompressor:
 
         # 检查是否还需要进一步压缩
         if not force and _estimate_tokens_from_messages(messages) < threshold:
+            messages = self._inject_capability_reminder(messages)
             session.messages = messages
             return messages
 
@@ -126,14 +139,33 @@ class ContextCompressor:
 
         # 检查是否还需要进一步压缩
         if not force and _estimate_tokens_from_messages(messages) < threshold:
+            messages = self._inject_capability_reminder(messages)
             session.messages = messages
             return messages
 
         # Layer 3: LLM 摘要 - 全量压缩
         if force or _estimate_tokens_from_messages(messages) >= threshold:
             messages = await self._llm_summarize(messages, context_window_size)
+        messages = self._inject_capability_reminder(messages)
         session.messages = messages
         return messages
+
+    def _inject_capability_reminder(self, messages: list[Message]) -> list[Message]:
+        """压缩后在消息流尾部补一条能力提醒（去重，避免多轮压缩累积）。
+
+        先移除历史里已存在的提醒，再在末尾追加最新一条，保证任意时刻
+        只有一条提醒且位于最后，紧贴即将发送的请求。
+        """
+        cleaned = [
+            msg for msg in messages
+            if not (msg.role == "user" and (msg.content or "").startswith(CAPABILITY_REMINDER_MARKER))
+        ]
+        cleaned.append(Message(
+            role="user",
+            content=CAPABILITY_REMINDER,
+            created_at=datetime.now(),
+        ))
+        return cleaned
 
     def _microcompact(self, messages: list[Message]) -> list[Message]:
         """Layer 1: Microcompact - 清理老工具结果

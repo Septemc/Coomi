@@ -83,7 +83,14 @@ from .widgets.status_panel import StatusPanel
 from .widgets.streaming_preview import StreamingPreview
 from .widgets.tool_call_banner import ToolCallBanner
 from .widgets.prompt_text_area import PromptTextArea
-from .screens.main_screen import PROMPT_PLACEHOLDER, MainScreen
+from .widgets.pending_queue_panel import PendingQueuePanel, QUEUE_ACTIONS
+from .widgets.comm_panel import CommPanel, CommInput
+from .screens.main_screen import (
+    PROMPT_PLACEHOLDER,
+    PROMPT_PLACEHOLDER_RUNNING,
+    MainScreen,
+    idle_placeholder,
+)
 from .screens.command_palette import CommandPalette
 from .terminal_capabilities import supports_modified_enter
 
@@ -264,6 +271,8 @@ class CoomiApp(App):
         Binding("ctrl+c", "copy_selected", "Copy", priority=True, show=False),
         Binding("shift+tab", "cycle_permission_mode", "Permission Mode", priority=True),
         Binding("ctrl+p", "command_palette", "Command Palette"),
+        Binding("ctrl+g", "enter_queue_mode", "Queue", priority=True),
+        Binding("ctrl+t", "toggle_comm_focus", "Talk", priority=True),
         Binding("f2", "go_home", "Home", priority=True),
         Binding("f3", "open_settings", "Setting", priority=True),
         # 问询模式导航 — priority=True 在 TextArea BINDINGS 之前检查
@@ -336,8 +345,15 @@ class CoomiApp(App):
         self._command_mode: bool = False
 
         # Unified interactive mode management
-        # "none" | "command" | "question" | "model_picker" | "context_picker"
+        # "none" | "command" | "question" | "model_picker" | "context_picker" | "queue"
         self._interactive_mode: str = "none"
+
+        # Pending execution queue (executes after current run finishes)
+        self._pending_queue: list[str] = []
+        self._queue_msg_index: int = 0        # ↑↓ 选中第几条
+        self._queue_action_index: int = 0     # ←→ 选中动作：0插队 1置顶 2编辑 3删除
+        self._queue_drain_gate = asyncio.Event()
+        self._queue_drain_gate.set()          # 未在整理时闸门常开
 
         # Model/Context picker state
         self._model_picker = None
@@ -461,7 +477,8 @@ class CoomiApp(App):
             return
         try:
             prompt = self.screen.query_one("#prompt-input", PromptTextArea)
-            prompt.placeholder = f"{PROMPT_PLACEHOLDER}。{suffix}"
+            # 更新提示优先占据第二行（覆盖随机使用提示）
+            prompt.placeholder = f"{PROMPT_PLACEHOLDER}\n⬆ {suffix}"
         except Exception:
             pass
 
@@ -797,7 +814,11 @@ class CoomiApp(App):
         if self.focused is prompt or prompt.disabled:
             return False
 
-        if self._interactive_mode in ("model_picker", "context_picker"):
+        # 焦点在额外交流窗口的输入框时，按键归它自己处理，勿抢到主输入框
+        if isinstance(self.focused, CommInput):
+            return False
+
+        if self._interactive_mode in ("model_picker", "context_picker", "queue"):
             return False
         if self._interactive_mode == "question":
             if not (self._plan_panel and self._plan_panel._is_other_selected):
@@ -1426,7 +1447,9 @@ class CoomiApp(App):
             "  [bold]/clear[/bold]         清空会话历史\n"
             "  [bold]/help[/bold]          显示此帮助\n\n"
             "[dim]快捷键: Ctrl+P 命令面板 | F2 Home | F3 Setting | Ctrl+R 切换推理 | "
-            "Shift+Tab 权限模式 | 双 Esc 退出[/dim]"
+            "Shift+Tab 权限模式 | 双 Esc 退出[/dim]\n"
+            "[dim]执行中: Esc 取消 | Ctrl+G 整理待执行队列（插队/置顶/编辑/删除） | "
+            "Ctrl+T 跳转下方交流窗口[/dim]"
         )
         self._show_command_result(help_text)
 
@@ -1437,6 +1460,11 @@ class CoomiApp(App):
         self._interactive_mode = mode
         self._command_mode = (mode == "command")
         self._question_mode = (mode == "question")
+        # 队列整理期间关闭排空闸门，避免正整理时流结束突然 pop 执行
+        if mode == "queue":
+            self._queue_drain_gate.clear()
+        else:
+            self._queue_drain_gate.set()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         """条件路由：统一基于 _interactive_mode 拦截 keys，否则放行给 TextArea"""
@@ -1479,6 +1507,14 @@ class CoomiApp(App):
                 return True
             return None
 
+        # 队列选择模式：拦截 ↑↓←→ / Enter / Esc
+        if mode == "queue":
+            if action in ("question_up", "question_down", "question_left",
+                          "question_right", "question_confirm",
+                          "question_cancel_or_exit"):
+                return True
+            return None
+
         if mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
             if action in (
                 "question_up",
@@ -1518,6 +1554,8 @@ class CoomiApp(App):
             self._model_picker.move_up()
         elif self._interactive_mode == "context_picker" and self._context_picker:
             self._context_picker.move_up()
+        elif self._interactive_mode == "queue":
+            self._queue_move_selection(-1)
 
     async def action_question_down(self) -> None:
         if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
@@ -1530,6 +1568,8 @@ class CoomiApp(App):
             self._model_picker.move_down()
         elif self._interactive_mode == "context_picker" and self._context_picker:
             self._context_picker.move_down()
+        elif self._interactive_mode == "queue":
+            self._queue_move_selection(1)
 
     async def action_question_toggle(self) -> None:
         if self._interactive_mode == "question" and self._plan_panel:
@@ -1551,6 +1591,8 @@ class CoomiApp(App):
             self._plan_panel.prev_question()
         elif self._interactive_mode == "model_picker" and self._model_picker:
             self._model_picker.toggle_mode_left()
+        elif self._interactive_mode == "queue":
+            self._queue_move_action(-1)
 
     async def action_question_right(self) -> None:
         if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
@@ -1559,6 +1601,8 @@ class CoomiApp(App):
             self._plan_panel.next_question()
         elif self._interactive_mode == "model_picker" and self._model_picker:
             self._model_picker.toggle_mode_right()
+        elif self._interactive_mode == "queue":
+            self._queue_move_action(1)
 
     def _get_prompt_text(self) -> str:
         try:
@@ -1588,6 +1632,10 @@ class CoomiApp(App):
             return False
 
     async def action_question_confirm(self) -> None:
+        if self._interactive_mode == "queue":
+            await self._queue_confirm_action()
+            return
+
         if self._interactive_mode == "none" and self._welcome_panel_active() and not self._get_prompt_text():
             self.screen.welcome_panel.confirm_selected_session()
             return
@@ -1656,6 +1704,10 @@ class CoomiApp(App):
             panel.next_question()
 
     def action_question_cancel_or_exit(self) -> None:
+        # 队列选择模式 → 退出整理
+        if self._interactive_mode == "queue":
+            self._exit_queue_mode()
+            return
         # 模型选择器 → 关闭 picker
         if self._interactive_mode == "model_picker":
             self._hide_model_picker()
@@ -1679,6 +1731,178 @@ class CoomiApp(App):
                 self._exit_timer = self.set_timer(2.0, self._reset_exit_pending)
         else:
             self.action_cancel_or_exit()
+
+    # -- Pending queue (待执行队列) -----------------------------------------
+
+    def _refresh_queue_panel(self) -> None:
+        """同步队列面板显示。"""
+        try:
+            panel = self.screen.query_one("#pending-queue", PendingQueuePanel)
+        except Exception:
+            return
+        panel.update_state(
+            self._pending_queue,
+            selecting=(self._interactive_mode == "queue"),
+            msg_index=self._queue_msg_index,
+            action_index=self._queue_action_index,
+        )
+
+    def _enqueue_pending(self, text: str) -> None:
+        """执行过程中追加的普通文本进入待执行队列。"""
+        self._pending_queue.append(text)
+        self._refresh_queue_panel()
+
+    def action_enter_queue_mode(self) -> None:
+        """Ctrl+G：进入队列选择模式。"""
+        # 队列为空 → 提示且不进入
+        if not self._pending_queue:
+            self._show_command_result("[dim]待执行队列为空[/dim]")
+            return
+        # 仅在无其他交互模式时进入
+        if self._interactive_mode not in ("none",):
+            return
+        self._queue_msg_index = 0
+        self._queue_action_index = 0
+        self._queue_drain_gate.clear()      # 整理期间暂停排空
+        self._set_interactive_mode("queue")
+        self._refresh_queue_panel()
+        # 右上角亮起 QUEUE 徽章
+        try:
+            self.screen.query_one("#status-panel", StatusPanel).set_queue_mode(True)
+        except Exception:
+            pass
+        # 输入框失焦，交由面板接管方向键（避免草稿被污染）
+        try:
+            self.screen.query_one("#pending-queue", PendingQueuePanel).focus()
+        except Exception:
+            pass
+
+    def _exit_queue_mode(self) -> None:
+        """退出队列选择模式，焦点回输入框。"""
+        self._set_interactive_mode("none")
+        self._refresh_queue_panel()
+        # 熄灭 QUEUE 徽章
+        try:
+            self.screen.query_one("#status-panel", StatusPanel).set_queue_mode(False)
+        except Exception:
+            pass
+        try:
+            self.screen.query_one("#prompt-input", PromptTextArea).focus()
+        except Exception:
+            pass
+
+    def action_toggle_comm_focus(self) -> None:
+        """Ctrl+T：在主输入框与交流窗口输入框之间切换焦点。
+
+        交流窗口仅在 agent 执行中出现（自动 show/hide）；执行中按 Ctrl+T
+        跳进它的输入框，再按一次跳回主输入框。空闲时窗口不可见，直接无视。
+        """
+        # 队列/问询等交互模式下不抢焦点
+        if self._interactive_mode != "none":
+            return
+        try:
+            comm = self.screen.query_one("#comm-panel", CommPanel)
+        except Exception:
+            return
+        # 窗口未显示（agent 未执行）→ 无意义
+        if not comm.display:
+            return
+        if isinstance(self.focused, CommInput):
+            # 已在交流窗口 → 跳回主输入框
+            try:
+                self.screen.query_one("#prompt-input", PromptTextArea).focus()
+            except Exception:
+                pass
+        else:
+            # 跳进交流窗口输入框
+            comm.comm_input.focus()
+
+    def _queue_move_selection(self, delta: int) -> None:
+        """↑↓ 切换选中的消息（钳位）。"""
+        if not self._pending_queue:
+            return
+        n = len(self._pending_queue)
+        self._queue_msg_index = max(0, min(n - 1, self._queue_msg_index + delta))
+        self._refresh_queue_panel()
+
+    def _queue_move_action(self, delta: int) -> None:
+        """←→ 切换动作（循环）。"""
+        n = len(QUEUE_ACTIONS)
+        self._queue_action_index = (self._queue_action_index + delta) % n
+        self._refresh_queue_panel()
+
+    async def _queue_confirm_action(self) -> None:
+        """Enter：对选中消息执行选中动作。"""
+        if not self._pending_queue:
+            self._exit_queue_mode()
+            return
+        idx = max(0, min(len(self._pending_queue) - 1, self._queue_msg_index))
+        action = QUEUE_ACTIONS[self._queue_action_index]
+
+        if action == "插队":
+            # 移除该条 → 立即引导（复用 cancel_token input_buffer）
+            text = self._pending_queue.pop(idx)
+            self._queue_msg_index = 0
+            self._exit_queue_mode()
+            self._queue_jump_in(text)
+            return
+
+        if action == "置顶":
+            # 移到队首，留在队列模式继续整理
+            text = self._pending_queue.pop(idx)
+            self._pending_queue.insert(0, text)
+            self._queue_msg_index = 0
+            self._refresh_queue_panel()
+            return
+
+        if action == "编辑":
+            # 取出文本放回输入框，退出队列模式
+            text = self._pending_queue.pop(idx)
+            self._queue_msg_index = 0
+            self._exit_queue_mode()
+            self._queue_edit(text)
+            return
+
+        if action == "删除":
+            self._pending_queue.pop(idx)
+            # 索引钳位
+            if self._queue_msg_index >= len(self._pending_queue):
+                self._queue_msg_index = max(0, len(self._pending_queue) - 1)
+            if not self._pending_queue:
+                self._exit_queue_mode()
+            else:
+                self._refresh_queue_panel()
+            return
+
+    def _queue_jump_in(self, text: str) -> None:
+        """立即引导：强制中断当前流并让下一轮执行 text。"""
+        if self._agent_running:
+            # 运行中 → 塞 buffer + cancel，循环取消后捡起它继续
+            self._cancel_requested = True
+            self._agent.cancel_token.set_input_buffer(text)
+            self._agent.cancel_token.cancel()
+        else:
+            # 空闲 → 直接起 run
+            import asyncio
+            asyncio.create_task(self._show_auto_config_or_run_agent(text))
+
+    def _queue_edit(self, text: str) -> None:
+        """编辑取回：草稿保留（追加回队尾），取回文本进输入框。"""
+        try:
+            prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+        except Exception:
+            return
+        draft = prompt.text.strip()
+        if draft:
+            # 已有草稿 → 追加回队尾，不丢
+            self._pending_queue.append(draft)
+        prompt.text = text
+        try:
+            prompt.move_cursor(prompt.document.end)
+        except Exception:
+            pass
+        prompt.focus()
+        self._refresh_queue_panel()
 
     async def _handle_ask_questions(self, questions: list[dict]) -> dict:
         """处理 Agent 发起的多问题问询
@@ -1981,6 +2205,23 @@ class CoomiApp(App):
             pass
         self._on_text_submit(text)
 
+    def on_comm_input_submitted(self, event: CommInput.Submitted) -> None:
+        """额外交流窗口输入提交 → 进入待执行队列（方案甲）。"""
+        text = event.text
+        try:
+            comm = self.screen.query_one("#comm-panel", CommPanel)
+            comm.comm_input.clear()
+        except Exception:
+            pass
+        stripped = text.strip()
+        if not stripped:
+            return
+        # 仅执行中有意义；执行结束窗口已隐藏，兜底走正常提交
+        if self._agent_running:
+            self._enqueue_pending(stripped)
+        else:
+            self._on_text_submit(stripped)
+
     def _on_text_submit(self, text: str) -> None:
         """TextArea 提交处理"""
         if text.lower() in ("exit", "quit"):
@@ -2054,6 +2295,11 @@ class CoomiApp(App):
         if command_result is not None:
             self._show_command_result(command_result)
             self._refresh_status_panel()
+            return
+
+        # 执行中普通文本 → 进入待执行队列，不立即发送
+        if self._agent_running:
+            self._enqueue_pending(text)
             return
 
         import asyncio
@@ -2217,16 +2463,10 @@ class CoomiApp(App):
     def action_cancel_or_exit(self) -> None:
         """Esc: cancel agent if running, otherwise double-press to exit."""
         if self._agent_running:
+            # 纯中断当前轮：不自动重跑、不排空队列、保留输入框草稿。
+            # 「插队」才使用 set_input_buffer；此处不触碰它。
             self._cancel_requested = True
             self._agent.cancel_token.cancel()
-            try:
-                textarea = self.screen.query_one("#prompt-input", PromptTextArea)
-                current_text = textarea.text
-                if current_text.strip():
-                    self._agent.cancel_token.set_input_buffer(current_text.strip())
-                    textarea.clear()
-            except Exception:
-                pass
             return
 
         # Idle — double-press Esc to exit
@@ -2295,12 +2535,20 @@ class CoomiApp(App):
         status = self.screen.query_one("#status-panel", StatusPanel)
         preview = self.screen.query_one("#stream-preview", StreamingPreview)
         prompt = self.screen.query_one("#prompt-input", PromptTextArea)
+        try:
+            comm = self.screen.query_one("#comm-panel", CommPanel)
+        except Exception:
+            comm = None
 
         self._wl(log, f"\n[bold cyan]You:[/bold cyan] {user_input}")
 
         prompt.disabled = False
+        prompt.placeholder = PROMPT_PLACEHOLDER_RUNNING
         status.set_executing()
         preview.show_status("Preparing context")
+        if comm is not None:
+            comm.show_panel()
+            comm.set_status("Preparing context")
 
         self._start_spinner()
 
@@ -2333,6 +2581,10 @@ class CoomiApp(App):
                     self._wl(log, f"[bold cyan]MCP {server_name} 已选择[/bold cyan]")
                 self._mcp_called_this_turn.clear()
                 preview.show_status("Waiting for model")
+                if comm is not None:
+                    comm.set_status("Waiting for model")
+                if comm is not None:
+                    comm.set_status("Waiting for model")
 
                 async for event in self._agent.run_stream(self._session, user_input):
                     if self._cancel_requested:
@@ -2382,12 +2634,16 @@ class CoomiApp(App):
                             if event.arguments:
                                 banner.set_arguments(event.arguments)
                         preview.show_tool(tool_name)
+                        if comm is not None:
+                            comm.set_current(tool_name, event.arguments)
 
                     # --- 工具执行中 ---
                     elif isinstance(event, ToolRunning):
                         banner = self._active_banners.get(event.tool_name)
                         if banner:
                             banner.set_running()
+                        if comm is not None:
+                            comm.set_current(event.tool_name, banner._arguments if banner else None)
 
                     # --- 工具完成 ---
                     elif isinstance(event, ToolDone):
@@ -2400,6 +2656,12 @@ class CoomiApp(App):
                             )
                             log.write(banner.build())
                         preview.show_thinking()
+                        if comm is not None:
+                            comm.push_done(
+                                event.tool_name,
+                                banner._arguments if banner else None,
+                                is_error=event.is_error,
+                            )
                         if event.tool_name.startswith("mcp__"):
                             pieces = event.tool_name.split("__", 2)
                             if len(pieces) == 3:
@@ -2414,6 +2676,11 @@ class CoomiApp(App):
                             banner.set_done(cache_hit=True)
                             log.write(banner.build())
                         preview.show_thinking()
+                        if comm is not None:
+                            comm.push_done(
+                                event.tool_name,
+                                banner._arguments if banner else None,
+                            )
 
                     # --- Token 用量 ---
                     elif isinstance(event, UsageUpdate):
@@ -2467,7 +2734,10 @@ class CoomiApp(App):
                     log.write(Markdown(self._stream_buffer))
                 preview.clear_preview()
 
-                # --- 检查 buffered input（取消 + append 模式）---
+                # --- 若正在整理队列则先等待闸门（放行后再判定 buffer/队列）---
+                await self._queue_drain_gate.wait()
+
+                # --- 检查 buffered input（立即引导 / 插队，最高优先）---
                 buffered = self._agent.cancel_token.get_input_buffer()
                 if buffered:
                     user_input = buffered
@@ -2476,11 +2746,25 @@ class CoomiApp(App):
                     self._wl(log, f"\n[bold cyan]You:[/bold cyan] {user_input}")
                     preview.show_thinking()
                     continue
-                else:
-                    for server_name in self._session.selected_mcps:
-                        if server_name not in self._mcp_called_this_turn:
-                            self._wl(log, f"[dim]MCP {server_name} 本轮未调用：模型判断当前回复无需工具[/dim]")
+
+                # --- 纯 Esc 中断 → 停止，不排空队列（草稿与队列保留）---
+                if self._cancel_requested:
+                    self._cancel_requested = False
                     break
+
+                # --- 队列排空 ---
+                if self._pending_queue:
+                    user_input = self._pending_queue.pop(0)
+                    self._refresh_queue_panel()
+                    self._agent.cancel_token.reset()
+                    self._wl(log, f"\n[bold cyan]You:[/bold cyan] {user_input}")
+                    preview.show_thinking()
+                    continue
+
+                for server_name in self._session.selected_mcps:
+                    if server_name not in self._mcp_called_this_turn:
+                        self._wl(log, f"[dim]MCP {server_name} 本轮未调用：模型判断当前回复无需工具[/dim]")
+                break
 
         except Exception as e:
             error_type = type(e).__name__
@@ -2505,7 +2789,10 @@ class CoomiApp(App):
             self._active_banners.clear()
             status.set_idle()
             preview.clear_preview()
+            if comm is not None:
+                comm.hide_panel()
             prompt.disabled = False
+            prompt.placeholder = idle_placeholder()
             prompt.focus()
 
             # Post-run token accounting is synchronous; memory extraction is best-effort.

@@ -33,6 +33,7 @@ class StatusPanel(Widget):
         self._exit_pending: bool = False
         self._loop_step: int = 0
         self._loop_total: int = 0
+        self._queue_mode: bool = False  # 队列整理模式（Ctrl+G）徽章
 
     # -- public mutation API ------------------------------------------------
 
@@ -73,6 +74,11 @@ class StatusPanel(Widget):
     def set_question_mode(self) -> None:
         """设置问询模式状态"""
         self._mode = "question"
+        self.refresh()
+
+    def set_queue_mode(self, active: bool) -> None:
+        """设置队列整理模式（Ctrl+G）徽章状态。"""
+        self._queue_mode = active
         self.refresh()
 
     def set_loop_progress(self, current_step: int, total_steps: int) -> None:
@@ -187,14 +193,31 @@ class StatusPanel(Widget):
         return table
 
     def _mode_badge(self) -> str:
+        """右上角模式徽章。
+
+        优先级：持久模式（plan/loop）> 临时交互（queue/question/compressing）。
+        plan/loop 是"我的会话在什么模式"的锚点，始终优先占据徽章；
+        没有持久模式时才显示临时状态，避免遮掉锚点。
+        """
+        # 持久模式：最高优先级
         if self._special_mode == "plan":
-            return "[bold black on #d4a72c] PLAN MODE [/bold black on #d4a72c]"
+            return _badge("⚡", "PLAN MODE", "black", "#d4a72c")
         if self._special_mode == "loop":
-            progress = ""
-            if self._loop_total:
-                progress = f" {self._loop_step}/{self._loop_total}"
-            return f"[bold black on #3fb950] LOOP MODE{progress} [/bold black on #3fb950]"
+            progress = f" {self._loop_step}/{self._loop_total}" if self._loop_total else ""
+            return _badge("🔁", f"LOOP MODE{progress}", "black", "#3fb950")
+        # 临时交互：仅在无持久模式时显示
+        if self._queue_mode:
+            return _badge("≡", "QUEUE MODE", "black", "#58a6ff")
+        if self._mode == "question":
+            return _badge("◎", "ASK MODE", "black", "#e3b341")
+        if self._mode == "compressing":
+            return _badge("⇄", "COMPRESSING", "black", "#bc8cff")
         return ""
+
+
+def _badge(icon: str, label: str, fg: str, bg: str) -> str:
+    """统一样式的模式徽章：图标 + 短标签 + 左右留白 + 背景色。"""
+    return f"[bold {fg} on {bg}] {icon} {label} [/bold {fg} on {bg}]"
 
 
 def _truncate(value: str, max_len: int) -> str:

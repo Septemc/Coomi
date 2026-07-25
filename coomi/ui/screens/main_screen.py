@@ -14,7 +14,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 
+from ..widgets.comm_panel import CommPanel
 from ..widgets.custom_header import CustomHeader
+from ..widgets.pending_queue_panel import PendingQueuePanel
 from ..widgets.prompt_text_area import PromptTextArea
 from ..widgets.selectable_rich_log import SelectableRichLog
 from ..widgets.status_panel import StatusPanel
@@ -23,6 +25,34 @@ from ..widgets.welcome_panel import WelcomePanel
 
 
 PROMPT_PLACEHOLDER = '输入消息（Enter 发送 · Shift+Enter / Ctrl+J 换行 · “/”查看指令 · 双 Esc 退出）'
+
+# 执行态占位符：agent 运行时提示可用的中断/协作键位
+PROMPT_PLACEHOLDER_RUNNING = '执行中 · Esc 取消 · Ctrl+G 整理队列 · Ctrl+T 临时交流'
+
+# 轮换使用提示池（空闲态作为第二行，随机抽取一条）
+# 涵盖 /指令、plan、loop、skill、mcp，以及新增的 Ctrl+G 队列 / Ctrl+T 交流键位
+USAGE_TIPS = (
+    '试试 “/” 唤起指令面板，plan / loop / model / skill / mcp 都在里面',
+    '“/plan” 进入只读规划模式，先想清楚再动手；“/exit_plan” 退出',
+    '“/loop” 拆解长线任务分步推进，右上角会显示步骤进度',
+    '“/skill” 管理技能扩展，“/mcp” 接入 MCP Server 增强能力',
+    '执行中直接敲普通文本回车会进待执行队列，任务结束后依次发送',
+    '执行中按 Ctrl+G 整理待执行队列：插队 / 置顶 / 编辑 / 删除',
+    '执行中按 Ctrl+T 跳进下方交流窗口，边跑边补充说明',
+    '“/model” 随时切换模型，“/context” 调整上下文窗口大小',
+    '“/compact” 手动压缩上下文，“/memory” 管理长期记忆',
+)
+
+
+def random_usage_tip() -> str:
+    """随机抽一条使用提示。"""
+    import random
+    return random.choice(USAGE_TIPS)
+
+
+def idle_placeholder() -> str:
+    """空闲态两行占位符：固定首行 + 随机提示第二行。"""
+    return f"{PROMPT_PLACEHOLDER}\n💡 {random_usage_tip()}"
 
 
 class MainScreen(Screen):
@@ -60,6 +90,9 @@ class MainScreen(Screen):
         yield SelectableRichLog(id="message-log", markup=True, wrap=True, highlight=True)
         yield StreamingPreview(id="stream-preview")
         yield StatusPanel(self._status_line, id="status-panel")
+        yield PendingQueuePanel(id="pending-queue")
+        # CommPanel dock:bottom，先于 prompt-input yield → 落在输入框下方
+        yield CommPanel(id="comm-panel")
         yield PromptTextArea(
             id="prompt-input",
             placeholder=PROMPT_PLACEHOLDER,
@@ -90,6 +123,14 @@ class MainScreen(Screen):
     @property
     def prompt_input(self) -> PromptTextArea:
         return self.query_one("#prompt-input", PromptTextArea)
+
+    @property
+    def pending_queue_panel(self) -> PendingQueuePanel:
+        return self.query_one("#pending-queue", PendingQueuePanel)
+
+    @property
+    def comm_panel(self) -> CommPanel:
+        return self.query_one("#comm-panel", CommPanel)
 
     def focus_prompt_input(self) -> None:
         """Keep keyboard input anchored to the bottom prompt."""
