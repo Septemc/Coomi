@@ -91,12 +91,12 @@ class MainScreen(Screen):
         yield StreamingPreview(id="stream-preview")
         yield StatusPanel(self._status_line, id="status-panel")
         yield PendingQueuePanel(id="pending-queue")
-        # CommPanel dock:bottom，先于 prompt-input yield → 落在输入框下方
-        yield CommPanel(id="comm-panel")
         yield PromptTextArea(
             id="prompt-input",
             placeholder=PROMPT_PLACEHOLDER,
         )
+        # CommPanel dock:bottom，后于 prompt-input yield → 堆叠在输入框上方
+        yield CommPanel(id="comm-panel")
 
     def on_mount(self) -> None:
         self.prompt_input.placeholder = PROMPT_PLACEHOLDER

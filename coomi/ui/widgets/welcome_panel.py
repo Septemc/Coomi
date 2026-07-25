@@ -278,9 +278,14 @@ class WelcomePanel(Widget):
         records = self._sessions[self._session_scroll : self._session_scroll + visible_count]
         self._history_visible_count = len(records)
 
-        rows: list[Text] = [Text(" Sessions", style="bold cyan"), Text("")]
+        total = len(self._sessions)
+        header = Text()
+        header.append(" 📁 历史会话", style="bold #58d0e8")
+        if total:
+            header.append(f"  ({total})", style="#6e7681")
+        rows: list[Text] = [header, Text("")]
         if not records:
-            rows.append(Text("  暂无历史会话", style="dim"))
+            rows.append(Text("   暂无历史会话，开始对话后自动保存", style="#6e7681"))
         else:
             for index, record in enumerate(records):
                 absolute_index = self._session_scroll + index
@@ -289,7 +294,14 @@ class WelcomePanel(Widget):
         used_rows = len(rows) + 1
         spacer = max(0, content_height - used_rows)
         rows.extend(Text("") for _ in range(spacer))
-        rows.append(Text(" ↑↓ 会话  ←→ 选中/删除  Enter 确定", style="dim"))
+        hint = Text()
+        hint.append(" ↑↓ ", style="bold #79c0ff")
+        hint.append("切换  ", style="#6e7681")
+        hint.append("←→ ", style="bold #79c0ff")
+        hint.append("选中/删除  ", style="#6e7681")
+        hint.append("Enter ", style="bold #79c0ff")
+        hint.append("确定", style="#6e7681")
+        rows.append(hint)
 
         return Panel(
             Group(*rows),
@@ -302,25 +314,36 @@ class WelcomePanel(Widget):
     def _render_session_row(self, record: SessionHistoryRecord, index: int, width: int) -> Text:
         date = record.updated_at.strftime("%m-%d %H:%M") if record.updated_at else "-- -- --:--"
         if index == self._selected_session:
-            actions = Text("  ")
-            select_style = "bold black on cyan" if self._selected_session_action == SESSION_ACTION_SELECT else "white on #264f78"
-            delete_style = "bold white on red" if self._selected_session_action == SESSION_ACTION_DELETE else "white on #264f78"
-            actions.append(" 选中 ", style=select_style)
-            actions.append(" ", style="white on #264f78")
-            actions.append(" 删除 ", style=delete_style)
-            base_width = max(13, width - actions.cell_len)
-            title_budget = max(4, base_width - 13)
+            # 右侧胶囊动作：选中 / 删除，当前动作高亮
+            actions = Text()
+            if self._selected_session_action == SESSION_ACTION_SELECT:
+                actions.append(" ✓ 选中 ", style="bold black on #58d0e8")
+                actions.append(" ", style="on #1f3b54")
+                actions.append(" ✕ 删除 ", style="#8b949e on #1f3b54")
+            else:
+                actions.append(" ✓ 选中 ", style="#8b949e on #1f3b54")
+                actions.append(" ", style="on #1f3b54")
+                actions.append(" ✕ 删除 ", style="bold white on #d13438")
+            base_width = max(15, width - actions.cell_len)
+            title_budget = max(4, base_width - 12)
             title = _truncate(record.title, title_budget)
-            line = f" {date}  {title}"
-            row = Text(line, style="bold white on #264f78")
+            row = Text(style="bold white on #1f3b54")
+            row.append(" ▸ ", style="bold #58d0e8 on #1f3b54")
+            row.append(f"{date}  ", style="#79c0ff on #1f3b54")
+            row.append(title, style="bold white on #1f3b54")
             if row.cell_len < base_width:
-                row.append(" " * (base_width - row.cell_len), style="white on #264f78")
+                row.append(" " * (base_width - row.cell_len), style="on #1f3b54")
             row.append_text(actions)
             return row
-        title_budget = max(8, width - 13)
+        title_budget = max(8, width - 12)
         title = _truncate(record.title, title_budget)
-        line = f" {date}  {title}"
-        return Text(line.ljust(width), style="white")
+        row = Text(no_wrap=True, overflow="crop")
+        row.append(" · ", style="#484f58")
+        row.append(f"{date}  ", style="#6e7681")
+        row.append(title, style="#c9d1d9")
+        if row.cell_len < width:
+            row.append(" " * (width - row.cell_len))
+        return row
 
     def on_click(self, event: events.Click) -> None:
         if event.x < self._history_x_start:

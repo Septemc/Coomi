@@ -355,6 +355,16 @@ class CoomiApp(App):
         self._queue_drain_gate = asyncio.Event()
         self._queue_drain_gate.set()          # 未在整理时闸门常开
 
+        # 交流队列（独立于主待执行队列）：Ctrl+T 交流窗口的输入进这里，
+        # 当前 agent 轮次结束后优先插入执行，仅限本次，不触发主队列。
+        self._comm_queue: list[str] = []
+
+        # 并发只读交流（side session）：主任务某个工具/PowerShell 正在阻塞执行时，
+        # 交流窗口的输入 / 立即引导会在独立只读旁路会话上并发执行，利用闲置 LLM 资源。
+        self._tool_executing: bool = False          # 是否正处于工具阻塞窗口
+        self._side_task: asyncio.Task | None = None  # 当前并发交流任务（同一时刻仅一个）
+        self._side_pending: list[str] = []           # 阻塞窗口内排队等待的 side 交流内容
+
         # Model/Context picker state
         self._model_picker = None
         self._context_picker = None
@@ -1792,10 +1802,11 @@ class CoomiApp(App):
             pass
 
     def action_toggle_comm_focus(self) -> None:
-        """Ctrl+T：在主输入框与交流窗口输入框之间切换焦点。
+        """Ctrl+T：开关额外交流窗口。
 
-        交流窗口仅在 agent 执行中出现（自动 show/hide）；执行中按 Ctrl+T
-        跳进它的输入框，再按一次跳回主输入框。空闲时窗口不可见，直接无视。
+        窗口默认隐藏。按 Ctrl+T 打开并聚焦交流输入框；再按 Ctrl+T 关闭
+        并把焦点交回主输入框。与 agent 是否执行无关。打开后鼠标点击可在
+        主输入框 / 交流区之间切换焦点。
         """
         # 队列/问询等交互模式下不抢焦点
         if self._interactive_mode != "none":
@@ -1804,18 +1815,16 @@ class CoomiApp(App):
             comm = self.screen.query_one("#comm-panel", CommPanel)
         except Exception:
             return
-        # 窗口未显示（agent 未执行）→ 无意义
-        if not comm.display:
-            return
-        if isinstance(self.focused, CommInput):
-            # 已在交流窗口 → 跳回主输入框
+        if comm.is_open:
+            # 关闭 → 焦点交回主输入框
+            comm.close_panel()
             try:
                 self.screen.query_one("#prompt-input", PromptTextArea).focus()
             except Exception:
                 pass
         else:
-            # 跳进交流窗口输入框
-            comm.comm_input.focus()
+            # 打开 → 聚焦交流输入框
+            comm.open_panel()
 
     def _queue_move_selection(self, delta: int) -> None:
         """↑↓ 切换选中的消息（钳位）。"""
@@ -1875,7 +1884,14 @@ class CoomiApp(App):
             return
 
     def _queue_jump_in(self, text: str) -> None:
-        """立即引导：强制中断当前流并让下一轮执行 text。"""
+        """立即引导：强制中断当前流并让下一轮执行 text。
+
+        特例：主任务正处在工具/PowerShell 阻塞窗口时，LLM 闲置，不中断主流，
+        改为在独立只读旁路会话上并发执行这条引导内容——主任务工具返回后照常接续。
+        """
+        if self._agent_running and self._tool_executing:
+            self._start_side_conversation(text)
+            return
         if self._agent_running:
             # 运行中 → 塞 buffer + cancel，循环取消后捡起它继续
             self._cancel_requested = True
@@ -1885,6 +1901,66 @@ class CoomiApp(App):
             # 空闲 → 直接起 run
             import asyncio
             asyncio.create_task(self._show_auto_config_or_run_agent(text))
+
+    # -- 并发只读交流（工具阻塞窗口内利用闲置 LLM）--------------------------
+
+    def _start_side_conversation(self, text: str) -> None:
+        """在工具阻塞窗口内，起一个独立只读旁路会话并发执行 text。
+
+        同一时刻只允许一个 side task 在跑；若已有在跑，则把新内容排入
+        `_side_pending`，当前 side 完成后接着跑（仍在阻塞窗口内则继续，
+        窗口已关闭则转入 `_comm_queue` 走轮末）。
+        """
+        if self._side_task is not None and not self._side_task.done():
+            self._side_pending.append(text)
+            return
+        self._side_task = asyncio.create_task(self._run_side_conversation(text))
+
+    async def _run_side_conversation(self, text: str) -> None:
+        """执行一次 side 交流，并在结束后消化 `_side_pending` 队列。"""
+        from ..engine.side_session import run_side_conversation
+
+        try:
+            comm = self.screen.query_one("#comm-panel", CommPanel)
+        except Exception:
+            return
+        try:
+            ctx_window = self.status_line.get_context_window_size()
+        except Exception:
+            ctx_window = 256_000
+        try:
+            await run_side_conversation(
+                comm,
+                self._session,
+                self._provider,
+                self._tool_registry,
+                ctx_window,
+                text,
+                app_context=self,
+                permission_system=self._permission_system,
+                hook_system=self._hook_system,
+                project_path=self._cwd,
+            )
+        except Exception:
+            pass
+
+        # 消化后续排队内容（仍在阻塞窗口内则继续并发；否则转轮末队列）
+        if self._side_pending:
+            nxt = self._side_pending.pop(0)
+            if self._tool_executing:
+                self._side_task = asyncio.create_task(self._run_side_conversation(nxt))
+                return
+            self._comm_queue.append(nxt)
+            self._refresh_comm_title()
+
+    async def _await_side_task(self) -> None:
+        """等待正在跑的 side task 收尾（工具已返回，避免两路流同时写 UI）。"""
+        task = self._side_task
+        if task is not None and not task.done():
+            try:
+                await task
+            except Exception:
+                pass
 
     def _queue_edit(self, text: str) -> None:
         """编辑取回：草稿保留（追加回队尾），取回文本进输入框。"""
@@ -2206,21 +2282,32 @@ class CoomiApp(App):
         self._on_text_submit(text)
 
     def on_comm_input_submitted(self, event: CommInput.Submitted) -> None:
-        """额外交流窗口输入提交 → 进入待执行队列（方案甲）。"""
-        text = event.text
-        try:
-            comm = self.screen.query_one("#comm-panel", CommPanel)
-            comm.comm_input.clear()
-        except Exception:
-            pass
-        stripped = text.strip()
+        """交流窗口输入提交。
+
+        分三种情形：
+          · 主任务正处在工具/PowerShell 阻塞窗口（LLM 闲置）—— 立即在独立只读
+            旁路会话上并发执行，回复直接显示在交流窗回复区，不进队列、不污染主线。
+          · 主任务运行中但非阻塞窗口 —— 进入「交流队列」，当前轮次结束后优先插入执行。
+          · agent 未运行 —— 无「当前任务」可插入，兜底走正常提交。
+        """
+        stripped = event.text.strip()
         if not stripped:
             return
-        # 仅执行中有意义；执行结束窗口已隐藏，兜底走正常提交
-        if self._agent_running:
-            self._enqueue_pending(stripped)
+        if self._agent_running and self._tool_executing:
+            self._start_side_conversation(stripped)
+        elif self._agent_running:
+            self._comm_queue.append(stripped)
+            self._refresh_comm_title()
         else:
             self._on_text_submit(stripped)
+
+    def _refresh_comm_title(self) -> None:
+        """同步交流窗口标题里的队列计数。"""
+        try:
+            comm = self.screen.query_one("#comm-panel", CommPanel)
+            comm.set_queue_count(len(self._comm_queue))
+        except Exception:
+            pass
 
     def _on_text_submit(self, text: str) -> None:
         """TextArea 提交处理"""
@@ -2535,10 +2622,6 @@ class CoomiApp(App):
         status = self.screen.query_one("#status-panel", StatusPanel)
         preview = self.screen.query_one("#stream-preview", StreamingPreview)
         prompt = self.screen.query_one("#prompt-input", PromptTextArea)
-        try:
-            comm = self.screen.query_one("#comm-panel", CommPanel)
-        except Exception:
-            comm = None
 
         self._wl(log, f"\n[bold cyan]You:[/bold cyan] {user_input}")
 
@@ -2546,9 +2629,6 @@ class CoomiApp(App):
         prompt.placeholder = PROMPT_PLACEHOLDER_RUNNING
         status.set_executing()
         preview.show_status("Preparing context")
-        if comm is not None:
-            comm.show_panel()
-            comm.set_status("Preparing context")
 
         self._start_spinner()
 
@@ -2581,10 +2661,6 @@ class CoomiApp(App):
                     self._wl(log, f"[bold cyan]MCP {server_name} 已选择[/bold cyan]")
                 self._mcp_called_this_turn.clear()
                 preview.show_status("Waiting for model")
-                if comm is not None:
-                    comm.set_status("Waiting for model")
-                if comm is not None:
-                    comm.set_status("Waiting for model")
 
                 async for event in self._agent.run_stream(self._session, user_input):
                     if self._cancel_requested:
@@ -2634,19 +2710,21 @@ class CoomiApp(App):
                             if event.arguments:
                                 banner.set_arguments(event.arguments)
                         preview.show_tool(tool_name)
-                        if comm is not None:
-                            comm.set_current(tool_name, event.arguments)
 
                     # --- 工具执行中 ---
                     elif isinstance(event, ToolRunning):
                         banner = self._active_banners.get(event.tool_name)
                         if banner:
                             banner.set_running()
-                        if comm is not None:
-                            comm.set_current(event.tool_name, banner._arguments if banner else None)
+                        # 进入工具阻塞窗口：此刻 LLM 闲置，允许并发只读交流。
+                        self._tool_executing = True
 
                     # --- 工具完成 ---
                     elif isinstance(event, ToolDone):
+                        # 退出阻塞窗口，并等待可能正在跑的并发交流收尾，
+                        # 避免主流与 side 流同时写 UI。
+                        self._tool_executing = False
+                        await self._await_side_task()
                         banner = self._active_banners.pop(event.tool_name, None)
                         if banner:
                             banner.set_done(
@@ -2656,12 +2734,6 @@ class CoomiApp(App):
                             )
                             log.write(banner.build())
                         preview.show_thinking()
-                        if comm is not None:
-                            comm.push_done(
-                                event.tool_name,
-                                banner._arguments if banner else None,
-                                is_error=event.is_error,
-                            )
                         if event.tool_name.startswith("mcp__"):
                             pieces = event.tool_name.split("__", 2)
                             if len(pieces) == 3:
@@ -2671,16 +2743,13 @@ class CoomiApp(App):
 
                     # --- 缓存命中 ---
                     elif isinstance(event, ToolCacheHit):
+                        self._tool_executing = False
+                        await self._await_side_task()
                         banner = self._active_banners.pop(event.tool_name, None)
                         if banner:
                             banner.set_done(cache_hit=True)
                             log.write(banner.build())
                         preview.show_thinking()
-                        if comm is not None:
-                            comm.push_done(
-                                event.tool_name,
-                                banner._arguments if banner else None,
-                            )
 
                     # --- Token 用量 ---
                     elif isinstance(event, UsageUpdate):
@@ -2752,7 +2821,16 @@ class CoomiApp(App):
                     self._cancel_requested = False
                     break
 
-                # --- 队列排空 ---
+                # --- 交流队列优先排空（仅限本次，不触发主队列）---
+                if self._comm_queue:
+                    user_input = self._comm_queue.pop(0)
+                    self._refresh_comm_title()
+                    self._agent.cancel_token.reset()
+                    self._wl(log, f"\n[bold #58d0e8]临时交流:[/bold #58d0e8] {user_input}")
+                    preview.show_thinking()
+                    continue
+
+                # --- 主队列排空 ---
                 if self._pending_queue:
                     user_input = self._pending_queue.pop(0)
                     self._refresh_queue_panel()
@@ -2786,11 +2864,12 @@ class CoomiApp(App):
             self._stop_spinner()
             self._agent_running = False
             self._cancel_requested = False
+            self._tool_executing = False
+            await self._await_side_task()
             self._active_banners.clear()
             status.set_idle()
             preview.clear_preview()
-            if comm is not None:
-                comm.hide_panel()
+            self._refresh_comm_title()
             prompt.disabled = False
             prompt.placeholder = idle_placeholder()
             prompt.focus()

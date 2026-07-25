@@ -65,7 +65,9 @@ class PendingQueuePanel(Widget):
         self._action_index = action_index
         # 队列为空则整体隐藏
         self.display = bool(self._items)
-        self.refresh()
+        # height:auto 组件在内容变化时必须 layout=True 才会重新测量高度，
+        # 否则条数增加/进入选择模式多出动作条时高度不刷新，只显示第一行。
+        self.refresh(layout=True)
 
     # -- rendering ----------------------------------------------------------
 
