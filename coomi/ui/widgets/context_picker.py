@@ -45,7 +45,7 @@ class ContextPicker(Widget):
         table.add_column(ratio=1)
 
         # ── 标题 ──
-        table.add_row(Text.from_markup("[bold cyan]Select Context Window[/bold cyan]"))
+        table.add_row(Text.from_markup("[bold #58a6ff]选择上下文窗口[/bold #58a6ff]"))
         table.add_row()
 
         # ── 预设列表 ──
@@ -54,17 +54,18 @@ class ContextPicker(Widget):
             size_str = _format_size(size)
             if is_sel:
                 table.add_row(Text.from_markup(
-                    f"[bold reverse] ● {size_str} ({size:,} tokens) [/bold reverse]"
+                    f"[bold #0d1117 on #58a6ff] ▸ {size_str} [/bold #0d1117 on #58a6ff]  "
+                    f"[dim]{size:,} tokens[/dim]"
                 ))
             else:
                 table.add_row(Text.from_markup(
-                    f"  [cyan]○[/cyan] {size_str} ({size:,} tokens)"
+                    f"  [#8b949e]○ {size_str}[/#8b949e]  [dim]{size:,} tokens[/dim]"
                 ))
 
         # ── 操作提示 ──
         table.add_row()
         table.add_row(Text.from_markup(
-            "  [dim]↑↓ 选择  Enter 确认  Esc 取消[/dim]"
+            "  [dim]↑↓ 选择   Enter 确认   Esc 取消[/dim]"
         ))
 
         return table

@@ -6,18 +6,31 @@ from coomi.tools.shell import bash as bash_module
 from coomi.tools.shell import powershell as powershell_module
 
 
-def _completed(command):
-    return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+class _FakePopen:
+    """最小 Popen 桩：记录构造参数，模拟一次成功的 communicate。"""
+
+    def __init__(self, command, **kwargs):
+        self.command = command
+        self.kwargs = kwargs
+        self.returncode = 0
+
+    def communicate(self, timeout=None):
+        self.returncode = 0
+        return ("ok", "")
+
+    def poll(self):
+        return self.returncode
 
 
 def test_powershell_tool_does_not_inherit_tui_stdin(monkeypatch):
     captured = {}
 
-    def fake_run(command, **kwargs):
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
         captured.update(kwargs)
-        return _completed(command)
+        return _FakePopen(command, **kwargs)
 
-    monkeypatch.setattr(powershell_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(powershell_module.subprocess, "Popen", fake_popen)
     result = powershell_module.PowerShellTool().run({"command": "Write-Output ok"})
 
     assert result.success
@@ -29,10 +42,10 @@ def test_powershell_tool_does_not_inherit_tui_stdin(monkeypatch):
 def test_bash_tool_does_not_inherit_tui_stdin(monkeypatch):
     captured = {}
 
-    def fake_run(command, **kwargs):
+    def fake_popen(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
-        return _completed(command)
+        return _FakePopen(command, **kwargs)
 
     if bash_module.os.name == "nt":
         monkeypatch.setattr(
@@ -40,7 +53,7 @@ def test_bash_tool_does_not_inherit_tui_stdin(monkeypatch):
             "_find_windows_bash",
             lambda: r"C:\Program Files\Git\bin\bash.exe",
         )
-    monkeypatch.setattr(bash_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(bash_module.subprocess, "Popen", fake_popen)
     result = bash_module.BashTool().run({"command": "echo ok"})
 
     assert result.success

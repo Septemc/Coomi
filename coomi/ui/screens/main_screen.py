@@ -52,7 +52,7 @@ def random_usage_tip() -> str:
 
 def idle_placeholder() -> str:
     """空闲态两行占位符：固定首行 + 随机提示第二行。"""
-    return f"{PROMPT_PLACEHOLDER}\n💡 {random_usage_tip()}"
+    return f"{PROMPT_PLACEHOLDER}\n{random_usage_tip()}"
 
 
 class MainScreen(Screen):

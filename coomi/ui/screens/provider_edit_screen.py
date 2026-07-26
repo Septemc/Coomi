@@ -36,6 +36,16 @@ FIELD_DEFS = [
     ("fast_model", "快速模型 (可选)", "如 deepseek-v4-flash"),
 ]
 
+# 必填字段（标签加红色 * 标记，与 action_save 的校验一致）
+REQUIRED_FIELDS = {"id", "api_key", "model"}
+
+# 字段分组（分节标题 + 组内字段 key 顺序）；顺序与 FIELD_DEFS 覆盖一致
+FIELD_GROUPS: list[tuple[str, list[str]]] = [  # (分节标题, 组内字段 key 顺序)
+    ("身份", ["id", "type", "tool_protocol", "display"]),
+    ("连接", ["api_key", "base_url"]),
+    ("模型", ["model", "fast_model"]),
+]
+
 FIELD_HELP = {
     "id": (
         "[bold]Provider ID[/bold]\n本地唯一标识，建议只使用字母、数字和连字符。"
@@ -115,7 +125,7 @@ class ProviderEditScreen(ModalScreen[bool]):
             }
 
     def compose(self) -> ComposeResult:
-        title = "Edit Provider" if self._editing else "New Provider"
+        title = "编辑 Provider" if self._editing else "新建 Provider"
         with Container(id="provider-edit-container"):
             yield Static(f"  {title}", id="provider-edit-title")
 
@@ -129,26 +139,45 @@ class ProviderEditScreen(ModalScreen[bool]):
                 )
                 yield Static("")
 
+            field_lookup = {key: (label, hint) for key, label, hint in FIELD_DEFS}
             with Vertical(id="provider-edit-form"):
-                for key, label, hint in FIELD_DEFS:
-                    value = self._init_values.get(key, "")
-                    yield Static(f"  [dim]{label}:[/dim]")
-                    if key == "type":
-                        yield Select(
-                            options=[(label, provider_type) for provider_type, label in PROVIDER_TYPE_OPTIONS],
-                            value=normalize_provider_type(value),
-                            allow_blank=False,
-                            id="field-type",
+                for group_title, group_keys in FIELD_GROUPS:
+                    yield Static(
+                        f"[bold #58a6ff]{group_title}[/bold #58a6ff]",
+                        classes="provider-field-group",
+                    )
+                    for key in group_keys:
+                        label, hint = field_lookup[key]
+                        value = self._init_values.get(key, "")
+                        marker = "[red]*[/red] " if key in REQUIRED_FIELDS else ""
+                        yield Static(
+                            f"  {marker}[#c9d1d9]{label}:[/#c9d1d9]",
+                            classes="provider-field-label",
                         )
-                    else:
-                        yield Input(
-                            value=value,
-                            placeholder=hint,
-                            password=(key == "api_key"),
-                            id=f"field-{key}",
-                        )
+                        if key == "type":
+                            yield Select(
+                                options=[(label, provider_type) for provider_type, label in PROVIDER_TYPE_OPTIONS],
+                                value=normalize_provider_type(value),
+                                allow_blank=False,
+                                id="field-type",
+                            )
+                        else:
+                            yield Input(
+                                value=value,
+                                placeholder=hint,
+                                password=(key == "api_key"),
+                                id=f"field-{key}",
+                            )
                 yield Static("")
-                yield Static("  [dim]Tab 切换字段  Ctrl+S 保存  Esc 取消[/dim]")
+                yield Static(
+                    "  [dim]Tab 切换字段[/dim]   [dim]·[/dim]   "
+                    "[#7ee787]Ctrl+S 保存[/#7ee787]   [dim]·[/dim]   "
+                    "[#f0883e]Esc 取消[/#f0883e]   [red]*[/red] [dim]为必填[/dim]"
+                )
+            yield Static(
+                "[bold #d4a72c]字段说明[/bold #d4a72c]",
+                id="provider-field-help-title",
+            )
             yield Static(FIELD_HELP["preset"], id="provider-field-help")
             yield Static("", id="provider-edit-error")
 

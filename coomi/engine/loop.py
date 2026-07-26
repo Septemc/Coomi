@@ -25,6 +25,8 @@ from ..ui.events import (
     AgentCancelled,
     AgentError,
     AgentEvent,
+    BackgroundTaskCompleted,
+    BackgroundTaskDetached,
     CompressionEvent,
     ConnectionRetry,
     ReasoningChunk,
@@ -34,6 +36,7 @@ from ..ui.events import (
     ToolStart,
     UsageUpdate,
 )
+from .background_tasks import BackgroundTaskRegistry
 from .session import Session, add_assistant_message, add_tool_result, add_user_message, update_token_usage
 from .tool_executor import ToolExecutionOutcome, ToolExecutor
 
@@ -209,6 +212,10 @@ class CancelToken:
     def get_input_buffer(self) -> str | None:
         return self._input_buffer
 
+    async def wait_cancelled(self) -> None:
+        """等待取消信号被置位（供工具执行与取消竞速）。"""
+        await self._event.wait()
+
 
 class LoopDetector:
     """检测 LLM↔工具 的死循环
@@ -319,6 +326,11 @@ class AgentLoop:
         )
         self._plan_mode: bool = False
         self._loop_detector = LoopDetector()
+        self._background_tasks = BackgroundTaskRegistry()
+
+    @property
+    def background_tasks(self) -> BackgroundTaskRegistry:
+        return self._background_tasks
 
     @property
     def plan_mode(self) -> bool:
@@ -343,6 +355,19 @@ class AgentLoop:
             ToolExecutionOutcome
         """
         return await self.tool_executor.execute(session, tool_call)
+
+    @staticmethod
+    def _discard_task(task: "asyncio.Task[ToolExecutionOutcome]") -> None:
+        """丢弃一个不再需要结果的工具任务，吞掉其异常避免 "never retrieved" 告警。
+
+        「停止真杀」路径用它：子进程已被 kill，工具线程会很快返回，
+        我们不关心其结果，只需确保异常不冒泡。
+        """
+        def _swallow(t: "asyncio.Task[ToolExecutionOutcome]") -> None:
+            if not t.cancelled():
+                _ = t.exception()
+
+        task.add_done_callback(_swallow)
 
     def _partition_tool_calls(self, tool_calls: list[ToolCall]) -> list[list[ToolCall]]:
         """Group consecutive concurrency-safe tool calls into parallel batches."""
@@ -532,6 +557,21 @@ class AgentLoop:
                 return
 
             effective_iteration += 1
+
+            # ---- 后台任务结果回灌 ----
+            # 被「插队 detach」转入后台的工具若已完成，将其结果作为新的 user
+            # 消息注入，让本轮 LLM 立刻看到迟到的结果并接续。
+            for bg in self._background_tasks.drain_completed():
+                add_user_message(
+                    session,
+                    f"[后台任务 #{bg.task_id} 完成] 工具 {bg.tool_name} 返回：\n{bg.result_text}",
+                )
+                yield BackgroundTaskCompleted(
+                    task_id=bg.task_id,
+                    tool_name=bg.tool_name,
+                    is_error=bg.is_error,
+                )
+
             messages = session.get_messages_for_api()
             available_tools = self.tool_registry.get_tool_definitions() or None
             if effective_iteration == 1 and omit_tools_for_first_turn:
@@ -671,7 +711,53 @@ class AgentLoop:
                         yield ToolRunning(tool_name=tool_call.name)
 
                     if len(batch) == 1:
-                        outcomes = [await self._execute_tool_async(session, batch[0])]
+                        # 单工具（含阻塞式 PowerShell/Bash）：让工具执行与取消信号竞速，
+                        # 以便「插队」能立即中断等待、把工具转入后台，主流接续。
+                        tool_task = asyncio.ensure_future(
+                            self._execute_tool_async(session, batch[0])
+                        )
+                        cancel_waiter = asyncio.ensure_future(
+                            self._cancel_token.wait_cancelled()
+                        )
+                        await asyncio.wait(
+                            {tool_task, cancel_waiter},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if tool_task.done():
+                            # 工具先完成 —— 正常路径
+                            cancel_waiter.cancel()
+                            outcomes = [tool_task.result()]
+                        else:
+                            # 取消先到 —— 区分「插队 detach」与「停止真杀」
+                            cancel_waiter.cancel()
+                            tc = batch[0]
+                            buffered = self._cancel_token.get_input_buffer()
+                            if buffered and self._background_tasks.can_detach():
+                                # 插队：工具转入后台（子进程继续跑），写占位 tool_result
+                                # 满足消息配对，随后返回让 UI 拾取插队内容重启一轮。
+                                task_id = self._background_tasks.detach(
+                                    tc.id, tc.name, tool_task
+                                )
+                                add_tool_result(
+                                    session,
+                                    tc.id,
+                                    f"⏳ [后台任务 #{task_id}] 工具 {tc.name} 仍在后台执行，"
+                                    f"完成后其结果会以系统消息回灌。请先处理用户的新指令。",
+                                )
+                                yield BackgroundTaskDetached(
+                                    task_id=task_id, tool_name=tc.name
+                                )
+                                return
+                            if buffered:
+                                # 插队但后台槽位已满（已有 1 个后台任务）：无法再转后台，
+                                # 退回正常等待工具完成；插队内容仍留在 buffer，由 UI 在
+                                # 本轮结束时拾取。不走真杀。
+                                outcomes = [await tool_task]
+                            else:
+                                # 停止真杀：子进程已由 UI 层 kill，丢弃工具任务结果避免告警。
+                                self._discard_task(tool_task)
+                                yield AgentCancelled()
+                                return
                     else:
                         outcomes = await asyncio.gather(
                             *(self._execute_tool_async(session, tool_call) for tool_call in batch)

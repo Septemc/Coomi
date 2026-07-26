@@ -1,6 +1,6 @@
 """Coomi Agent — 受 Claude Code 启发的 AI 编程助手"""
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 __author__ = "Septemc"
 
 from .types import Message, ToolCall, LLMResponse, Session

@@ -15,7 +15,7 @@ COMMANDS = [
     ("/loop", "长线任务执行模式"),
     ("/model", "切换 LLM 模型"),
     ("/context", "设置上下文窗口"),
-    ("/permission", "查看/切换权限模式"),
+    ("/permission", "切换权限模式"),
     ("/memory", "记忆管理"),
     ("/skill", "Skill 扩展管理"),
     ("/mcp", "MCP Server 管理"),

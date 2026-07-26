@@ -11,6 +11,7 @@ import os
 import subprocess
 from typing import Any
 
+from ...engine.process_registry import PROCESS_REGISTRY
 from ..base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 
 MAX_OUTPUT_LENGTH = 50000
@@ -64,27 +65,36 @@ class PowerShellTool(BaseTool):
         command = arguments["command"]
         timeout = arguments.get("timeout", 120000) / 1000
         cwd = os.getcwd()
+        proc: subprocess.Popen | None = None
 
         try:
             process_options: dict[str, Any] = {"stdin": subprocess.DEVNULL}
             if os.name == "nt":
                 process_options["creationflags"] = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(
+            # 用 Popen 而非 run，以便把句柄登记到 PROCESS_REGISTRY，
+            # 让「停止真杀」能终止仍在运行的子进程。
+            proc = subprocess.Popen(
                 ["powershell.exe", "-Command", command],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 **process_options,
             )
+            PROCESS_REGISTRY.register(proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            finally:
+                PROCESS_REGISTRY.unregister(proc)
+            returncode = proc.returncode
 
-            output = _truncate_output(result.stdout)
-            if result.stderr:
-                stderr_truncated = _truncate_output(result.stderr)
+            output = _truncate_output(stdout or "")
+            if stderr:
+                stderr_truncated = _truncate_output(stderr)
                 output += f"\n[stderr]\n{stderr_truncated}"
 
-            if result.returncode != 0:
+            if returncode != 0:
                 error_detail = (
-                    f"Command exited with code {result.returncode}\n"
+                    f"Command exited with code {returncode}\n"
                     f"  Command: {command}\n"
                     f"  Working directory: {cwd}\n"
                     f"  Timeout: {timeout}s"
@@ -97,6 +107,13 @@ class PowerShellTool(BaseTool):
 
             return ToolResult(success=True, output=output)
         except subprocess.TimeoutExpired:
+            # communicate 超时后子进程仍在运行，必须主动收尾避免僵尸/泄漏。
+            if proc is not None:
+                try:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
             return ToolResult(
                 success=False,
                 output="",

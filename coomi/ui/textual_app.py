@@ -29,6 +29,7 @@ from textual.widgets import Input
 from .widgets.selectable_rich_log import SelectableRichLog as RichLog
 from .widgets.custom_header import CustomHeader
 
+from ..engine.process_registry import PROCESS_REGISTRY
 from ..engine.session import Session, SessionManager, build_system_prompt
 from ..services import get_llm_provider
 from ..services.session_history import (
@@ -64,6 +65,8 @@ from ..tools.registry import create_default_registry
 from ..ui.events import (
     AgentCancelled,
     AgentError,
+    BackgroundTaskCompleted,
+    BackgroundTaskDetached,
     CompressionEvent,
     ConnectionRetry,
     LoopProgress,
@@ -488,7 +491,7 @@ class CoomiApp(App):
         try:
             prompt = self.screen.query_one("#prompt-input", PromptTextArea)
             # 更新提示优先占据第二行（覆盖随机使用提示）
-            prompt.placeholder = f"{PROMPT_PLACEHOLDER}\n⬆ {suffix}"
+            prompt.placeholder = f"{PROMPT_PLACEHOLDER}\n{suffix}"
         except Exception:
             pass
 
@@ -666,7 +669,7 @@ class CoomiApp(App):
         elif cmd == "/context":
             asyncio.create_task(self._show_context_picker())
         elif cmd == "/permission":
-            self._show_permission_mode()
+            self.action_cycle_permission_mode()
         elif cmd == "/memory":
             result = _handle_memory_command(self._memory_manager, "")
             self._show_command_result(result)
@@ -869,14 +872,6 @@ class CoomiApp(App):
             f"[dim]{self._permission_system.get_mode_description()}[/dim]"
         )
         asyncio.create_task(self._rebuild_system_prompt())
-
-    def _show_permission_mode(self) -> None:
-        self._show_command_result(
-            "[bold cyan]Permission modes[/bold cyan]\n\n"
-            f"Current: [bold yellow]{self._permission_system.get_mode_label()}[/bold yellow]\n"
-            f"[dim]{self._permission_system.get_mode_description()}[/dim]\n\n"
-            "[dim]Press Shift+Tab or run /permission next to cycle.[/dim]"
-        )
 
     async def _handle_skill_command(self, args: str) -> str:
         if not self._skill_manager:
@@ -1225,7 +1220,7 @@ class CoomiApp(App):
             status.set_plan_mode(True)
         except Exception:
             pass
-        self._show_command_result("[bold yellow]⚡ Plan Mode activated[/bold yellow]")
+        self._show_command_result("[bold yellow]Plan Mode activated[/bold yellow]")
         await self._rebuild_system_prompt()
 
     async def _handle_exit_plan_command(self) -> None:
@@ -1295,7 +1290,7 @@ class CoomiApp(App):
         else:
             # 无 spec — 进入 plan 模式创建
             self._show_command_result(
-                "[bold yellow]⚡ Loop Mode — No spec provided[/bold yellow]\n"
+                "[bold yellow]Loop Mode — No spec provided[/bold yellow]\n"
                 "[dim]Describe your task, and I'll help you create a spec first.[/dim]\n"
                 "[dim]Or provide a spec path: /loop path/to/spec.md[/dim]"
             )
@@ -1324,7 +1319,7 @@ class CoomiApp(App):
             pass
 
         self._show_command_result(
-            f"[bold green]🔁 Loop Mode Started[/bold green]\n"
+            f"[bold green]Loop Mode Started[/bold green]\n"
             f"  Task: {spec.title}\n"
             f"  Steps: {len(spec.steps)}\n"
             f"[dim]Use /loop status | /loop pause | /loop stop[/dim]"
@@ -1363,13 +1358,13 @@ class CoomiApp(App):
 
                 elif isinstance(event, LoopStepDone):
                     if event.success:
-                        self._wl(log, f"[green]✅ Step {event.step_index + 1} complete[/green]")
+                        self._wl(log, f"[green]Step {event.step_index + 1} complete[/green]")
                     else:
-                        self._wl(log, f"[yellow]⚠️ Step {event.step_index + 1} skipped[/yellow]")
+                        self._wl(log, f"[yellow]Step {event.step_index + 1} skipped[/yellow]")
 
                 elif isinstance(event, LoopIssueCreated):
                     self._wl(log, (
-                        f"[red]⚠️ ISSUE created for Step {event.step_index + 1}[/red] "
+                        f"[red]ISSUE created for Step {event.step_index + 1}[/red] "
                         f"[dim]See .coomi/loops/{self._loop_session.loop_id}/ISSUE.md[/dim]"
                     ))
 
@@ -1405,7 +1400,7 @@ class CoomiApp(App):
             status.set_idle()
             preview.clear_preview()
             if self._loop_session and self._loop_session.status.value == "completed":
-                self._wl(log, f"\n[bold green]🎉 Loop Complete: {spec.title}[/bold green]")
+                self._wl(log, f"\n[bold green]Loop Complete: {spec.title}[/bold green]")
 
     async def _rebuild_system_prompt(self) -> None:
         """立即重建 system prompt，使当前 agent 轮次看到最新指令"""
@@ -1886,14 +1881,14 @@ class CoomiApp(App):
     def _queue_jump_in(self, text: str) -> None:
         """立即引导：强制中断当前流并让下一轮执行 text。
 
-        特例：主任务正处在工具/PowerShell 阻塞窗口时，LLM 闲置，不中断主流，
-        改为在独立只读旁路会话上并发执行这条引导内容——主任务工具返回后照常接续。
+        运行中一律「塞 buffer + cancel」。若此刻正卡在阻塞工具上，loop 的取消
+        竞速会把该工具转入后台（detach），子进程继续跑，完成后结果自动回灌续跑；
+        否则就是常规的取消—拾取 buffer 续跑。
+
+        注意：与「交流窗口」的并发只读旁路是两套不同机制——交流窗口利用闲置 LLM
+        临时只读作答、不污染主线；插队则中断主流、把工具转后台、AI 记得有任务在跑。
         """
-        if self._agent_running and self._tool_executing:
-            self._start_side_conversation(text)
-            return
         if self._agent_running:
-            # 运行中 → 塞 buffer + cancel，循环取消后捡起它继续
             self._cancel_requested = True
             self._agent.cancel_token.set_input_buffer(text)
             self._agent.cancel_token.cancel()
@@ -2221,10 +2216,7 @@ class CoomiApp(App):
             command_result = _handle_context_command(
                 self.status_line, self._agent, stripped[8:].strip()
             )
-        elif stripped == "/permission":
-            self._show_permission_mode()
-            return
-        elif stripped == "/permission next":
+        elif stripped == "/permission" or stripped == "/permission next":
             self.action_cycle_permission_mode()
             return
         elif stripped == "/memory" or stripped.startswith("/memory "):
@@ -2334,10 +2326,7 @@ class CoomiApp(App):
             command_result = _handle_context_command(
                 self.status_line, self._agent, stripped[8:].strip()
             )
-        elif stripped == "/permission":
-            self._show_permission_mode()
-            return
-        elif stripped == "/permission next":
+        elif stripped == "/permission" or stripped == "/permission next":
             self.action_cycle_permission_mode()
             return
         elif stripped == "/memory" or stripped.startswith("/memory "):
@@ -2550,9 +2539,19 @@ class CoomiApp(App):
     def action_cancel_or_exit(self) -> None:
         """Esc: cancel agent if running, otherwise double-press to exit."""
         if self._agent_running:
-            # 纯中断当前轮：不自动重跑、不排空队列、保留输入框草稿。
-            # 「插队」才使用 set_input_buffer；此处不触碰它。
+            # 停止 = 彻底杀：真杀正在运行的子进程（PowerShell/Bash），
+            # 取消已转后台的 detach 任务，再置取消标志中断主流。
+            # 「插队」才使用 set_input_buffer；此处不触碰它，因此 loop 竞速
+            # 会走真杀分支（丢弃工具任务、yield AgentCancelled）。
             self._cancel_requested = True
+            try:
+                PROCESS_REGISTRY.kill_all()
+            except Exception:
+                pass
+            try:
+                self._agent.background_tasks.cancel_all()
+            except Exception:
+                pass
             self._agent.cancel_token.cancel()
             return
 
@@ -2779,6 +2778,36 @@ class CoomiApp(App):
                             f"[dim]Context compressed: {event.before} -> {event.after} messages[/dim]",
                         )
 
+                    # --- 插队：工具转入后台 ---
+                    elif isinstance(event, BackgroundTaskDetached):
+                        # 工具阻塞被插队中断：banner 收尾为「转后台」，退出阻塞窗口。
+                        self._tool_executing = False
+                        banner = self._active_banners.pop(event.tool_name, None)
+                        if banner:
+                            banner.set_done(
+                                result_preview=f"↪ 已转入后台任务 #{event.task_id}，完成后回灌",
+                                cache_hit=False,
+                                is_error=False,
+                            )
+                            log.write(banner.build())
+                        self._wl(
+                            log,
+                            f"\n[yellow]↪ 工具 {event.tool_name} 转入后台"
+                            f"（任务 #{event.task_id}），先处理插队指令。[/yellow]",
+                        )
+                        preview.show_thinking()
+
+                    # --- 后台任务完成：结果已回灌 ---
+                    elif isinstance(event, BackgroundTaskCompleted):
+                        color = "red" if event.is_error else "green"
+                        state = "失败" if event.is_error else "完成"
+                        self._wl(
+                            log,
+                            f"\n[{color}]✓ 后台任务 #{event.task_id}"
+                            f"（{event.tool_name}）{state}，结果已回灌。[/{color}]",
+                        )
+                        preview.show_thinking()
+
                     # --- 取消/错误 ---
                     elif isinstance(event, AgentCancelled):
                         self._cleanup_banners_on_cancel(log)
@@ -2787,10 +2816,10 @@ class CoomiApp(App):
                     elif isinstance(event, AgentError):
                         if event.is_fatal:
                             # 致命错误 — 步骤确实失败，但用户仍可继续对话
-                            self._wl(log, f"\n[red]❌ Agent 错误:[/red] {event.message}")
+                            self._wl(log, f"\n[red]Agent 错误:[/red] {event.message}")
                         else:
                             # 非致命警告 — LLM 降级/迭代上限等，可继续
-                            self._wl(log, f"\n[yellow]⚠️ Agent 警告:[/yellow] {event.message}")
+                            self._wl(log, f"\n[yellow]Agent 警告:[/yellow] {event.message}")
                         self._wl(log, "[dim]你可以继续输入来恢复工作。[/dim]")
                         break  # 退出当前 run，但 finally 块会正常恢复 UI
 
@@ -2836,6 +2865,19 @@ class CoomiApp(App):
                     self._refresh_queue_panel()
                     self._agent.cancel_token.reset()
                     self._wl(log, f"\n[bold cyan]You:[/bold cyan] {user_input}")
+                    preview.show_thinking()
+                    continue
+
+                # --- 后台任务尚未完成 → 不结束，等它回来自动续跑一轮 ---
+                # 「插队 detach」把工具转入后台后，主流已处理完插队内容而空闲；
+                # 此处阻塞等待后台任务完成，其结果会在下一轮开头被 drain 回灌。
+                if self._agent.background_tasks.has_pending_work():
+                    preview.show_status("等待后台任务完成")
+                    result = await self._agent.background_tasks.wait_any_completed()
+                    self._agent.background_tasks.requeue_completed(result)
+                    self._agent.cancel_token.reset()
+                    self._cancel_requested = False
+                    user_input = ""
                     preview.show_thinking()
                     continue
 

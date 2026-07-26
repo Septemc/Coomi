@@ -187,7 +187,7 @@ class CommPanel(Vertical):
         out = self._output()
         if out is None:
             return
-        out.write(f"[dim]🔍 查阅 {tool_name}…[/dim]")
+        out.write(f"[dim]查阅 {tool_name}…[/dim]")
 
     def show_reply_streaming(self, reply: str) -> None:
         """生成过程中的流式预览（保持忙碌标题；正文定稿在 append_reply）。"""

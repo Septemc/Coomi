@@ -90,6 +90,21 @@ class AgentCancelled(AgentEvent):
     """用户取消了 Agent 执行"""
 
 
+@dataclass
+class BackgroundTaskDetached(AgentEvent):
+    """插队中断：正在执行的工具被转入后台，主流接续处理插队内容。"""
+    task_id: int = 0
+    tool_name: str = ""
+
+
+@dataclass
+class BackgroundTaskCompleted(AgentEvent):
+    """后台任务执行完成，结果已回灌为消息，Agent 将自动续跑一轮。"""
+    task_id: int = 0
+    tool_name: str = ""
+    is_error: bool = False
+
+
 # ============================================================
 # Loop 模式事件
 # ============================================================

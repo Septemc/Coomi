@@ -166,12 +166,12 @@ class StatusPanel(Widget):
             )
         elif self._mode == "plan":
             bottom = (
-                "[bold yellow]⚡ Plan Mode[/bold yellow] "
+                "[bold yellow]◆ Plan Mode[/bold yellow] "
                 "[dim]| Esc to exit plan[/dim]"
             )
         elif self._mode == "loop":
             bottom = (
-                f"[bold green]🔁 Loop: Step {self._loop_step}/{self._loop_total}[/bold green] "
+                f"[bold green]↻ Loop: Step {self._loop_step}/{self._loop_total}[/bold green] "
                 "[dim]| Esc to cancel[/dim]"
             )
         elif self._mode == "compressing":
@@ -187,7 +187,8 @@ class StatusPanel(Widget):
         top_row = Table.grid(padding=(0, 0), expand=True)
         top_row.add_column(ratio=1)
         top_row.add_column(justify="right", no_wrap=True)
-        top_row.add_row(top, self._mode_badge())
+        top_row.add_column(width=2, no_wrap=True)
+        top_row.add_row(top, self._mode_badge(), "")
         table.add_row(top_row)
         table.add_row(bottom)
         return table
@@ -201,10 +202,10 @@ class StatusPanel(Widget):
         """
         # 持久模式：最高优先级
         if self._special_mode == "plan":
-            return _badge("⚡", "PLAN MODE", "black", "#d4a72c")
+            return _badge("◆", "PLAN MODE", "black", "#d4a72c")
         if self._special_mode == "loop":
             progress = f" {self._loop_step}/{self._loop_total}" if self._loop_total else ""
-            return _badge("🔁", f"LOOP MODE{progress}", "black", "#3fb950")
+            return _badge("↻", f"LOOP MODE{progress}", "black", "#3fb950")
         # 临时交互：仅在无持久模式时显示
         if self._queue_mode:
             return _badge("≡", "QUEUE MODE", "black", "#58a6ff")

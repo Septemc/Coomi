@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...engine.process_registry import PROCESS_REGISTRY
 from ..base import BaseTool, ToolAccess, ToolConcurrency, ToolResult
 
 # 常见 exit code 诊断提示
@@ -142,6 +143,7 @@ class BashTool(BaseTool):
         command = arguments["command"]
         timeout = arguments.get("timeout", 120000) / 1000  # 转换为秒
         cwd = os.getcwd()
+        proc: subprocess.Popen | None = None
 
         try:
             process_options: dict[str, Any] = {"stdin": subprocess.DEVNULL}
@@ -163,25 +165,33 @@ class BashTool(BaseTool):
             else:
                 invocation = command
                 use_shell = True
-            result = subprocess.run(
+            # 用 Popen 而非 run，以便把句柄登记到 PROCESS_REGISTRY，
+            # 让「停止真杀」能终止仍在运行的子进程。
+            proc = subprocess.Popen(
                 invocation,
                 shell=use_shell,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 cwd=cwd,
                 **process_options,
             )
+            PROCESS_REGISTRY.register(proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            finally:
+                PROCESS_REGISTRY.unregister(proc)
+            returncode = proc.returncode
 
-            output = _truncate_output(result.stdout)
-            if result.stderr:
-                stderr_truncated = _truncate_output(result.stderr)
+            output = _truncate_output(stdout or "")
+            if stderr:
+                stderr_truncated = _truncate_output(stderr)
                 output += f"\n[stderr]\n{stderr_truncated}"
 
-            if result.returncode != 0:
-                hint = EXIT_CODE_HINTS.get(result.returncode, "")
+            if returncode != 0:
+                hint = EXIT_CODE_HINTS.get(returncode, "")
                 error_parts = [
-                    f"Command exited with code {result.returncode}",
+                    f"Command exited with code {returncode}",
                     f"  Command: {command}",
                     f"  Working directory: {cwd}",
                     f"  Timeout: {timeout}s",
@@ -197,6 +207,13 @@ class BashTool(BaseTool):
 
             return ToolResult(success=True, output=output)
         except subprocess.TimeoutExpired:
+            # communicate 超时后子进程仍在运行，必须主动收尾避免僵尸/泄漏。
+            if proc is not None:
+                try:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
             return ToolResult(
                 success=False,
                 output="",

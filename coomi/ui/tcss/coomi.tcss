@@ -231,13 +231,33 @@ ProviderEditScreen {
     padding: 0 1;
 }
 
+.provider-field-group {
+    height: 1;
+    margin-top: 1;
+    color: #58a6ff;
+    text-style: bold;
+}
+
+.provider-field-label {
+    height: 1;
+    color: #c9d1d9;
+}
+
+#provider-field-help-title {
+    height: 1;
+    padding: 0 1;
+    background: #0d1117;
+    border-top: solid #30363d;
+    color: #d4a72c;
+    text-style: bold;
+}
+
 #provider-field-help {
     height: auto;
     max-height: 8;
     overflow-y: auto;
-    padding: 1;
+    padding: 0 1 1 1;
     background: #0d1117;
-    border-top: solid #30363d;
     color: #c9d1d9;
 }
 

@@ -35,39 +35,41 @@ class ModelPicker(Widget):
         table.add_column(ratio=1)
 
         # ── 标题 ──
-        table.add_row(Text.from_markup("[bold cyan]Select Model[/bold cyan]"))
+        table.add_row(Text.from_markup(
+            f"[bold #58a6ff]选择模型[/bold #58a6ff]  [dim]{len(self._providers)} 个[/dim]"
+        ))
         table.add_row()
 
         # ── 模式提示 ──
-        mode_hint = (
-            "  Mode: [bold reverse] active [/bold reverse] (持久) | "
-            "[dim] once_active [/dim] (仅本次)"
-            if self._mode == "active"
-            else "  Mode: [dim] active [/dim] (持久) | "
-            "[bold reverse] once_active [/bold reverse] (仅本次)"
-        )
-        table.add_row(Text.from_markup(mode_hint))
+        if self._mode == "active":
+            active_pill = "[bold #0d1117 on #58a6ff] active [/bold #0d1117 on #58a6ff] [dim]持久[/dim]"
+            once_pill = "[#8b949e] once_active [/#8b949e] [dim]仅本次[/dim]"
+        else:
+            active_pill = "[#8b949e] active [/#8b949e] [dim]持久[/dim]"
+            once_pill = "[bold #0d1117 on #58a6ff] once_active [/bold #0d1117 on #58a6ff] [dim]仅本次[/dim]"
+        table.add_row(Text.from_markup(f"  {active_pill}   [dim]·[/dim]   {once_pill}"))
         table.add_row()
 
         # ── 模型列表 ──
         for i, p in enumerate(self._providers):
             is_sel = (i == self._selected)
-            fast_info = f" (fast: {p.fast_model})" if p.fast_model else ""
-            row_text = f"{p.id}: {p.display} ({provider_type_label(p.type)}){fast_info}"
-
+            fast_info = f"  [dim]fast: {p.fast_model}[/dim]" if p.fast_model else ""
+            type_label = provider_type_label(p.type)
             if is_sel:
                 table.add_row(Text.from_markup(
-                    f"[bold reverse] ● {row_text} [/bold reverse]"
+                    f"[bold #0d1117 on #58a6ff] ▸ {p.id} [/bold #0d1117 on #58a6ff]  "
+                    f"[bold #e6edf3]{p.display}[/bold #e6edf3]  [#39c5cf]{type_label}[/#39c5cf]{fast_info}"
                 ))
             else:
                 table.add_row(Text.from_markup(
-                    f"  [cyan]○[/cyan] {row_text}"
+                    f"  [#8b949e]○ {p.id}[/#8b949e]  [#c9d1d9]{p.display}[/#c9d1d9]  "
+                    f"[dim]{type_label}[/dim]{fast_info}"
                 ))
 
         # ── 操作提示 ──
         table.add_row()
         table.add_row(Text.from_markup(
-            "  [dim]↑↓ 选择  ←→ 切换模式  Enter 确认  Esc 取消[/dim]"
+            "  [dim]↑↓ 选择   ←→ 切换模式   Enter 确认   Esc 取消[/dim]"
         ))
 
         return table

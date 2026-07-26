@@ -280,18 +280,22 @@ class WelcomePanel(Widget):
 
         total = len(self._sessions)
         header = Text()
-        header.append(" 📁 历史会话", style="bold #58d0e8")
+        header.append(" 历史会话", style="bold #58d0e8")
         if total:
             header.append(f"  ({total})", style="#6e7681")
         rows: list[Text] = [header, Text("")]
+        # 选中行渲染为两行，行高需额外计入，避免下方 spacer/提示被挤出面板。
+        extra_lines = 0
         if not records:
             rows.append(Text("   暂无历史会话，开始对话后自动保存", style="#6e7681"))
         else:
             for index, record in enumerate(records):
                 absolute_index = self._session_scroll + index
                 rows.append(self._render_session_row(record, absolute_index, max(10, width - 4)))
+                if absolute_index == self._selected_session:
+                    extra_lines += 1
 
-        used_rows = len(rows) + 1
+        used_rows = len(rows) + 1 + extra_lines
         spacer = max(0, content_height - used_rows)
         rows.extend(Text("") for _ in range(spacer))
         hint = Text()
@@ -312,31 +316,37 @@ class WelcomePanel(Widget):
         )
 
     def _render_session_row(self, record: SessionHistoryRecord, index: int, width: int) -> Text:
-        date = record.updated_at.strftime("%m-%d %H:%M") if record.updated_at else "-- -- --:--"
+        date = record.updated_at.strftime("%m-%d") if record.updated_at else "-- --"
         if index == self._selected_session:
-            # 右侧胶囊动作：选中 / 删除，当前动作高亮
-            actions = Text()
+            # 选中态占两行：第一行「日期 + 摘要」，第二行操作胶囊。
+            # 第一行固定占用：marker " ▸ "(3) + 日期"MM-DD  "(8) = 11
+            title = _truncate(record.title, max(4, width - 11))
+            line1 = Text(no_wrap=True, overflow="crop", style="bold white on #1f3b54")
+            line1.append(" ▸ ", style="bold #58d0e8 on #1f3b54")
+            line1.append(f"{date}  ", style="#79c0ff on #1f3b54")
+            line1.append(title, style="bold white on #1f3b54")
+            if line1.cell_len < width:
+                line1.append(" " * (width - line1.cell_len), style="on #1f3b54")
+
+            # 第二行：仅选中态出现的操作胶囊，当前动作高亮
+            line2 = Text(no_wrap=True, overflow="crop", style="on #1f3b54")
+            line2.append("   ", style="on #1f3b54")
             if self._selected_session_action == SESSION_ACTION_SELECT:
-                actions.append(" ✓ 选中 ", style="bold black on #58d0e8")
-                actions.append(" ", style="on #1f3b54")
-                actions.append(" ✕ 删除 ", style="#8b949e on #1f3b54")
+                line2.append(" 选中 ", style="bold black on #58d0e8")
+                line2.append(" ", style="on #1f3b54")
+                line2.append(" 删除 ", style="#8b949e on #1f3b54")
             else:
-                actions.append(" ✓ 选中 ", style="#8b949e on #1f3b54")
-                actions.append(" ", style="on #1f3b54")
-                actions.append(" ✕ 删除 ", style="bold white on #d13438")
-            base_width = max(15, width - actions.cell_len)
-            title_budget = max(4, base_width - 12)
-            title = _truncate(record.title, title_budget)
-            row = Text(style="bold white on #1f3b54")
-            row.append(" ▸ ", style="bold #58d0e8 on #1f3b54")
-            row.append(f"{date}  ", style="#79c0ff on #1f3b54")
-            row.append(title, style="bold white on #1f3b54")
-            if row.cell_len < base_width:
-                row.append(" " * (base_width - row.cell_len), style="on #1f3b54")
-            row.append_text(actions)
-            return row
-        title_budget = max(8, width - 12)
-        title = _truncate(record.title, title_budget)
+                line2.append(" 选中 ", style="#8b949e on #1f3b54")
+                line2.append(" ", style="on #1f3b54")
+                line2.append(" 删除 ", style="bold white on #d13438")
+            if line2.cell_len < width:
+                line2.append(" " * (width - line2.cell_len), style="on #1f3b54")
+
+            line1.append("\n")
+            line1.append_text(line2)
+            return line1
+
+        title = _truncate(record.title, max(8, width - 9))
         row = Text(no_wrap=True, overflow="crop")
         row.append(" · ", style="#484f58")
         row.append(f"{date}  ", style="#6e7681")
@@ -348,13 +358,23 @@ class WelcomePanel(Widget):
     def on_click(self, event: events.Click) -> None:
         if event.x < self._history_x_start:
             return
-        index = event.y - self._history_item_y_start
-        if 0 <= index < self._history_visible_count:
-            self._selected_session = self._session_scroll + index
-            self._selected_session_action = SESSION_ACTION_SELECT
-            self.refresh()
-            self.open_selected_session()
-            event.stop()
+        # 选中行占两行，其后各行的视觉 y 相应下移一行。把点击的视觉行
+        # 折算回记录下标：逐行累加各记录的视觉高度直到命中。
+        line = event.y - self._history_item_y_start
+        if line < 0:
+            return
+        cursor = 0
+        for offset in range(self._history_visible_count):
+            absolute = self._session_scroll + offset
+            span = 2 if absolute == self._selected_session else 1
+            if cursor <= line < cursor + span:
+                self._selected_session = absolute
+                self._selected_session_action = SESSION_ACTION_SELECT
+                self.refresh()
+                self.open_selected_session()
+                event.stop()
+                return
+            cursor += span
 
     def _keep_selected_visible(self, visible_count: int | None = None) -> None:
         visible_count = visible_count or max(1, self._history_visible_count)

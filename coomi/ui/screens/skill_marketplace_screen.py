@@ -19,6 +19,14 @@ from ...catalogs import SkillCatalogEntry, load_skill_catalog
 from ...services.skills.installer import SkillInstallError
 from ...services.skills.manager import SkillManager
 from ...services.skills.models import SkillRecord, SkillUpdateStatus
+from .marketplace_style import (
+    detail_field,
+    detail_message,
+    render_actions,
+    render_footer,
+    render_source_marker,
+    state_badge,
+)
 
 
 class SkillMarketplaceScreen(ModalScreen[None]):
@@ -60,7 +68,7 @@ class SkillMarketplaceScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="skill-marketplace-container"):
-            yield Static("  Skill 精选管理", id="skill-marketplace-title")
+            yield Static("", id="skill-marketplace-title")
             yield OptionList(id="skill-marketplace-list", compact=True)
             yield Static(id="skill-marketplace-detail")
             yield Static(id="skill-marketplace-footer")
@@ -99,7 +107,19 @@ class SkillMarketplaceScreen(ModalScreen[None]):
                 0,
             )
             options.highlighted = index
+        self._refresh_title()
         self._refresh_detail()
+
+    def _refresh_title(self) -> None:
+        try:
+            title = self.query_one("#skill-marketplace-title", Static)
+        except Exception:
+            return
+        installed = sum(1 for _, _, record in self._items if record is not None)
+        title.update(
+            f"  [bold]Skill 精选管理[/bold]   "
+            f"[dim]共 {len(self._items)} 项 · 已安装 {installed}[/dim]"
+        )
 
     def _render_row(
         self, item: tuple[str, SkillCatalogEntry | None, SkillRecord | None]
@@ -121,13 +141,12 @@ class SkillMarketplaceScreen(ModalScreen[None]):
             state = "已是最新"
         else:
             state = "已安装"
-        marker = "精选" if entry else "本地/手动"
         actions = self._actions(record)
-        rendered_actions = " | ".join(
-            f"[reverse]{escape(action)}[/reverse]" if i == self._action_index else escape(action)
-            for i, action in enumerate(actions)
+        name = escape(entry.name if entry else item_id)
+        return (
+            f"[bold #e6edf3]{name}[/bold #e6edf3]  {state_badge(state)}  "
+            f"{render_source_marker(entry is not None)}  {render_actions(actions, self._action_index)}"
         )
-        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{marker}[/dim]  {rendered_actions}"
 
     @staticmethod
     def _actions(record: SkillRecord | None) -> list[str]:
@@ -180,26 +199,29 @@ class SkillMarketplaceScreen(ModalScreen[None]):
         if self._errors.get(item_id):
             message = self._errors[item_id]
         delete_note = (
-            "\n[bold yellow]再次按 Delete 或 Enter 确认卸载；Esc 取消。[/bold yellow]"
+            "\n[bold #d4a72c]再次按 Delete 或 Enter 确认卸载；Esc 取消。[/bold #d4a72c]"
             if self._delete_pending == item_id
             else ""
         )
+        name = escape(entry.name if entry else item_id)
+        author = escape(entry.author if entry else "未知")
         detail.update(
-            f"[bold cyan]{escape(entry.name if entry else item_id)}[/bold cyan]\n"
-            f"{escape(description or '无描述')}\n\n"
-            f"[dim]来源:[/dim] {escape(source or '未知')}\n"
-            f"[dim]作者/许可证:[/dim] {escape(entry.author if entry else '未知')} / {escape(license_name)}\n"
-            f"[dim]要求:[/dim] {escape(requirements)}\n"
-            f"[dim]已启用:[/dim] {enabled}\n"
-            f"[dim]当前 commit:[/dim] {escape(commit)}\n"
-            f"[dim]安装提示:[/dim] {escape(notes)}\n"
-            f"[dim]状态:[/dim] {escape(message or '按 Enter 安装或检查更新')}"
+            f"[bold #58d0e8]{name}[/bold #58d0e8]  {render_source_marker(entry is not None)}\n"
+            f"[#c9d1d9]{escape(description or '无描述')}[/#c9d1d9]\n\n"
+            f"{detail_field('来源', escape(source or '未知'))}\n"
+            f"{detail_field('作者 / 许可证', f'{author} / {escape(license_name)}')}\n"
+            f"{detail_field('要求', escape(requirements))}\n"
+            f"{detail_field('已启用', escape(enabled))}\n"
+            f"{detail_field('当前 commit', escape(commit))}\n"
+            f"{detail_field('安装提示', escape(notes))}\n"
+            f"{detail_field('状态', detail_message(escape(message or '按 Enter 安装或检查更新')))}"
             f"{delete_note}"
         )
-        readonly = "  [yellow]Plan Mode：只读[/yellow]" if self._plan_mode else ""
         footer.update(
-            "[dim]↑↓ 选择  Enter 安装/检查/更新  Delete 卸载  Esc 返回[/dim]"
-            + readonly
+            render_footer(
+                "↑↓ 选择   ←→ 动作   Enter 安装/检查/更新   Delete 卸载   Esc 返回",
+                self._plan_mode,
+            )
         )
 
     def action_move_up(self) -> None:

@@ -19,6 +19,14 @@ from ...catalogs import McpCatalogEntry, load_mcp_catalog
 from ...services.mcp.client import McpError
 from ...services.mcp.manager import McpManager
 from ...services.mcp.models import McpServerConfig
+from .marketplace_style import (
+    detail_field,
+    detail_message,
+    render_actions,
+    render_footer,
+    render_source_marker,
+    state_badge,
+)
 
 
 class McpInstallConfigScreen(ModalScreen[Optional[dict[str, str]]]):
@@ -121,7 +129,7 @@ class McpMarketplaceScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="mcp-marketplace-container"):
-            yield Static("  MCP 精选管理", id="mcp-marketplace-title")
+            yield Static("", id="mcp-marketplace-title")
             yield OptionList(id="mcp-marketplace-list", compact=True)
             yield Static(id="mcp-marketplace-detail")
             yield Static(id="mcp-marketplace-footer")
@@ -175,6 +183,11 @@ class McpMarketplaceScreen(ModalScreen[None]):
                 (i for i, item in enumerate(self._items) if item[0] == selected_id),
                 0,
             )
+        try:
+            title = self.query_one("#mcp-marketplace-title", Static)
+            title.update(f"[bold #58a6ff]MCP 精选管理[/bold #58a6ff]  [dim]{len(self._items)} 项[/dim]")
+        except Exception:
+            pass
         self._refresh_detail()
 
     def _render_row(
@@ -196,13 +209,12 @@ class McpMarketplaceScreen(ModalScreen[None]):
             state = f"已连接 {server.tools_count} 工具"
         else:
             state = "已配置"
-        source = "精选" if entry else "手动"
         actions = self._actions(server)
-        rendered = " | ".join(
-            f"[reverse]{escape(action)}[/reverse]" if i == self._action_index else escape(action)
-            for i, action in enumerate(actions)
+        name = escape(entry.name if entry else item_id)
+        return (
+            f"[bold #e6edf3]{name}[/bold #e6edf3]  {state_badge(state)}  "
+            f"{render_source_marker(entry is not None)}  {render_actions(actions, self._action_index)}"
         )
-        return f"[bold]{escape(entry.name if entry else item_id)}[/bold]  [{state}]  [dim]{source}[/dim]  {rendered}"
 
     @staticmethod
     def _actions(server: McpServerConfig | None) -> list[str]:
@@ -241,28 +253,30 @@ class McpMarketplaceScreen(ModalScreen[None]):
         if not message and server and server.last_error:
             message = self._redact_error(server)
         delete_note = (
-            "\n[bold yellow]再次按 Delete 或 Enter 确认移除；Esc 取消。[/bold yellow]"
+            "\n[bold #d4a72c]再次按 Delete 或 Enter 确认移除；Esc 取消。[/bold #d4a72c]"
             if self._delete_pending == item_id
             else ""
         )
+        name = escape(entry.name if entry else item_id)
         detail.update(
-            f"[bold cyan]{escape(entry.name if entry else item_id)}[/bold cyan]\n"
-            f"{escape(description)}\n\n"
-            f"[dim]来源:[/dim] {escape(source)}\n"
-            f"[dim]来源级别/许可证:[/dim] {escape(trust)} / {escape(license_name)}\n"
-            f"[dim]Transport:[/dim] {escape(transport)}\n"
-            f"[dim]运行要求:[/dim] {escape(runtime)}\n"
-            f"[dim]安装输入:[/dim] {escape(required)}\n"
-            f"[dim]已发现工具:[/dim] {tools_count}\n"
-            f"[dim]最近检查:[/dim] {escape(checked)}\n"
-            f"[dim]安装提示:[/dim] {escape(notes)}\n"
-            f"[dim]状态:[/dim] {escape(message or '按 Enter 配置或测试连接')}"
+            f"[bold #58d0e8]{name}[/bold #58d0e8]  {render_source_marker(entry is not None)}\n"
+            f"[#c9d1d9]{escape(description)}[/#c9d1d9]\n\n"
+            f"{detail_field('来源', escape(source))}\n"
+            f"{detail_field('来源级别 / 许可证', f'{escape(trust)} / {escape(license_name)}')}\n"
+            f"{detail_field('Transport', escape(transport))}\n"
+            f"{detail_field('运行要求', escape(runtime))}\n"
+            f"{detail_field('安装输入', escape(required))}\n"
+            f"{detail_field('已发现工具', str(tools_count))}\n"
+            f"{detail_field('最近检查', escape(checked))}\n"
+            f"{detail_field('安装提示', escape(notes))}\n"
+            f"{detail_field('状态', detail_message(escape(message or '按 Enter 配置或测试连接')))}"
             f"{delete_note}"
         )
-        readonly = "  [yellow]Plan Mode：只读[/yellow]" if self._plan_mode else ""
         footer.update(
-            "[dim]↑↓ 选择  Enter 配置/测试/刷新  Delete 移除  Esc 返回[/dim]"
-            + readonly
+            render_footer(
+                "↑↓ 选择   ←→ 动作   Enter 配置/测试/刷新   Delete 移除   Esc 返回",
+                self._plan_mode,
+            )
         )
 
     @staticmethod
