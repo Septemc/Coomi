@@ -88,3 +88,8 @@ docs/重构文档/*
 !docs/重构文档/0729重构文档/
 docs/重构文档/0729重构文档/*
 !docs/重构文档/0729重构文档/Coomi-Rust-0729-重构计划.md
+
+# Track the fixed upstream Codex Rust snapshot in full. Nested ignore files
+# still exclude build artifacts such as codex-rs/target/.
+!codex-rs/
+!codex-rs/**
