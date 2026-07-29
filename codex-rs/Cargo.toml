@@ -30,6 +30,7 @@ members = [
     "cloud-tasks-mock-client",
     "cli",
     "coomi-cli",
+    "coomi-integration-tests",
     "coomi-provider-adapters",
     "collaboration-mode-templates",
     "connectors",

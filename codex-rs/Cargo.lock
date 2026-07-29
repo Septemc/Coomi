@@ -4785,18 +4785,37 @@ dependencies = [
  "codex-exec",
  "codex-tui",
  "codex-utils-cli",
+ "coomi-provider-adapters",
  "dirs",
+ "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "coomi-integration-tests"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "core_test_support",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
 name = "coomi-provider-adapters"
 version = "0.0.0"
 dependencies = [
+ "async-stream",
  "codex-api",
  "codex-protocol",
  "codex-tools",
+ "eventsource-stream",
  "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

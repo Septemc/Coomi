@@ -9,6 +9,11 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_utils_cli::CliConfigOverrides;
+use coomi_provider_adapters::ConformanceStatus;
+use coomi_provider_adapters::HttpProviderTransport;
+use coomi_provider_adapters::ProviderRegistry;
+use coomi_provider_adapters::run_basic_conformance;
+use coomi_provider_adapters::run_full_conformance;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -51,6 +56,9 @@ enum Command {
 
     /// Resume a previous interactive session.
     Resume(ResumeCommand),
+
+    /// Inspect and test configured model providers.
+    Provider(ProviderCommand),
 }
 
 #[derive(Debug, clap::Args)]
@@ -72,14 +80,49 @@ struct ResumeCommand {
     include_non_interactive: bool,
 }
 
+#[derive(Debug, clap::Args)]
+struct ProviderCommand {
+    #[command(subcommand)]
+    command: ProviderSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ProviderSubcommand {
+    /// Run a safe native-tool compatibility probe.
+    Test(ProviderTestCommand),
+}
+
+#[derive(Debug, clap::Args)]
+struct ProviderTestCommand {
+    /// Provider id from providers.json. Defaults to the active provider.
+    #[arg(long)]
+    provider: Option<String>,
+
+    /// Override the configured model for this probe.
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Use a provider registry other than `$COOMI_HOME/config/providers.json`.
+    #[arg(long = "registry", value_name = "FILE")]
+    registry: Option<PathBuf>,
+
+    /// Print the conformance report as JSON.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+
+    /// Run the extended C04-C07 and C10 live probes.
+    #[arg(long, default_value_t = false)]
+    full: bool,
+}
+
 fn main() -> anyhow::Result<()> {
     let coomi_home = resolve_coomi_home()?;
     install_codex_compatibility_environment(&coomi_home);
 
-    arg0_dispatch_or_else(|arg0_paths| async move { run_cli(arg0_paths).await })
+    arg0_dispatch_or_else(|arg0_paths| async move { run_cli(arg0_paths, coomi_home).await })
 }
 
-async fn run_cli(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+async fn run_cli(arg0_paths: Arg0DispatchPaths, coomi_home: PathBuf) -> anyhow::Result<()> {
     let CoomiCli {
         config_overrides,
         mut interactive,
@@ -130,6 +173,64 @@ async fn run_cli(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )
             .await?;
             handle_tui_exit(exit_info)
+        }
+        Some(Command::Provider(provider)) => run_provider_command(provider, &coomi_home).await,
+    }
+}
+
+async fn run_provider_command(command: ProviderCommand, coomi_home: &Path) -> anyhow::Result<()> {
+    match command.command {
+        ProviderSubcommand::Test(test) => {
+            let config_path = test
+                .registry
+                .unwrap_or_else(|| coomi_home.join("config").join("providers.json"));
+            let registry = ProviderRegistry::load(&config_path)?;
+            let provider = match test.provider.as_deref() {
+                Some(id) => registry
+                    .provider(id)
+                    .with_context(|| format!("provider `{id}` was not found"))?,
+                None => registry.active_provider()?,
+            };
+            let mut provider = provider.clone();
+            if let Some(model) = test.model {
+                provider.model = model;
+            }
+            let model = provider.model.clone();
+            let transport = HttpProviderTransport::new(provider)?;
+            let report = if test.full {
+                run_full_conformance(&transport, &model).await?
+            } else {
+                run_basic_conformance(&transport, &model).await?
+            };
+
+            if test.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Provider: {}  Model: {}  Protocol: {:?}",
+                    report.provider_id, report.model, report.protocol
+                );
+                for result in &report.results {
+                    let status = match result.status {
+                        ConformanceStatus::Passed => "PASS",
+                        ConformanceStatus::Failed => "FAIL",
+                        ConformanceStatus::NotRun => "SKIP",
+                    };
+                    println!("{status:4} {:?}: {}", result.case, result.detail);
+                }
+                println!(
+                    "Usage: input={} cached={} output={} total={}",
+                    report.input_tokens,
+                    report.cached_input_tokens,
+                    report.output_tokens,
+                    report.total_tokens
+                );
+            }
+
+            if !report.required_tool_loop_passed() {
+                anyhow::bail!("provider failed required C01-C03 tool-loop conformance");
+            }
+            Ok(())
         }
     }
 }
@@ -293,5 +394,15 @@ mod tests {
 
         let root_help = coomi_command().render_long_help().to_string();
         assert!(!root_help.to_ascii_lowercase().contains("codex"));
+
+        let mut command = coomi_command();
+        let provider_test = command
+            .find_subcommand_mut("provider")
+            .expect("provider subcommand")
+            .find_subcommand_mut("test")
+            .expect("provider test subcommand");
+        let provider_help = provider_test.render_long_help().to_string();
+        assert!(provider_help.contains("--registry"));
+        assert!(!provider_help.to_ascii_lowercase().contains("codex"));
     }
 }

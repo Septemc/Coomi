@@ -30,10 +30,11 @@
 - 已固定并导入 `openai/codex@9a6668f674d74b35418fa534b3b6285a315d0765` 的 `codex-rs/`，5,394 个文件逐路径 SHA-256 差异为 0；
 - 已将纯上游快照独立提交为 `3e788b384c2c796c5288672d5c49a04fa47de45c`；
 - 已安装并验证 Rust 1.95.0、rustfmt、Clippy 和 Windows MSVC x64 工具链；
-- 已建立 `coomi-cli` 与 `coomi-provider-adapters`，通过 `cargo check`、5 个单元测试和严格 Clippy；
+- 已建立 `coomi-cli`、`coomi-provider-adapters` 与 `coomi-integration-tests`，四种 wire adapter 共用 Codex canonical request/event，并通过 13 个目标测试和严格 Clippy；
 - `coomi` 已直接链接 Codex TUI/exec crate，并使用独立 `~/.coomi` 配置根；
 - `coomi --version`、`--help`、`exec --help` 和 `resume --help` 已通过本地 binary 验证，帮助页无 Codex 品牌残留；
-- P0 动态成本基线、provider C01-C10 探测和 P1 mock Responses Turn 尚未完成，不计为已验收。
+- `opencode-go/deepseek-v4-flash` 已完成首轮真实 C01-C07、C09、C10 探测；C06 证明服务端不保证 strict schema，必须启用客户端参数校验；
+- P1 mock Responses Turn 与 C08 断流工具幂等测试已完成；P0 动态成本基线、完整 C10 边界和普通 Agent Loop 的 adapter 接入仍未完成。
 
 ## 2. 执行摘要
 
@@ -320,7 +321,7 @@ flowchart TB
 - App Server daemon 和远程 WebSocket transport；
 - Coomi/Codex 作为 MCP Server；
 - Python XML/DSML/文本工具调用 fallback；
-- Anthropic Messages wire adapter 和当前无能力声明的 Generic provider；
+- 当前无能力声明、不能映射为四种受支持 wire protocol 的 Generic provider；
 - 任何 XML/DSML/自然语言文本工具 fallback。
 
 删除能力必须从 Cargo features、配置 schema、CLI、TUI、事件、工具注册和 prompt 片段中同时移除，避免“界面隐藏但仍有上下文成本”。
@@ -678,6 +679,19 @@ provider/model 必须通过自动探测后才能启用工具：
 
 探测结果按 provider + base URL + model + API version 缓存并设置 TTL。厂商更新模型后必须重新探测；不能以“OpenAI-compatible”宣传语替代测试证据。
 
+2026-07-30 已使用 `~/.coomi/config/providers.json` 中的 `opencode-go` 和 `deepseek-v4-flash` 完成首轮真实探测，未记录或输出 API key：
+
+| 探测 | 结果 | 结论 |
+| --- | --- | --- |
+| C01-C05 | 通过 | 单工具、流式参数、工具续接、并行调用和复杂 schema wire 映射可用 |
+| C06 | 失败 | 模型接受 schema 非法 enum；`strict_json_schema = false`，执行前必须客户端验证 |
+| C07 | 通过 | reasoning 与 tool delta 可交错解析 |
+| C08 | mock 集成通过 | 断流重试复用同一 `call_id` 时实际工具副作用只执行一次；真实 endpoint 不主动制造断流 |
+| C09 | 通过 | usage、cached input 和 end-turn 映射可用 |
+| C10 | 部分通过 | 显式错误响应已验证；超长 schema 和工具数量上限仍需补齐 |
+
+完整真实探测累计 usage 为 input 2,857、cached input 1,536、output 582、total 3,439。该数据只证明协议探测成本，不替代 B01-B10 产品成本基线。
+
 ### 12.7 工具暴露计划
 
 | 层级 | 示例 | 暴露规则 |
@@ -862,13 +876,14 @@ profile 是多个底层策略的预设，不替代底层精确配置。
 
 ### 16.2 Provider compatibility boundary
 
-Coomi 保持 Core、Agent Loop、ToolRouter、Thread history 和 TUI events 全部使用 Codex canonical protocol，只在模型 wire 边界提供三类 transport：
+Coomi 保持 Core、Agent Loop、ToolRouter、Thread history 和 TUI events 全部使用 Codex canonical protocol，只在模型 wire 边界提供四类 transport：
 
 | Transport | 用途 | 对 Core 的承诺 |
 | --- | --- | --- |
 | `NativeResponsesTransport` | OpenAI 和完整 Responses provider | 最大程度原样继承 Codex `ModelClientSession` |
-| `ResponsesSubsetAdapter` | 提供 `/v1/responses` 但缺少部分扩展的 provider | 过滤/降级 unsupported fields，输出 canonical events |
-| `OpenAiChatToolAdapter` | 仅支持 OpenAI-style Chat Completions tools 的 provider | messages/tool_calls/role:tool 与 ResponseItem 双向转换 |
+| `OpenAiCompatibleAdapter` | OpenAI-style Chat Completions tools provider | messages/tool_calls/role:tool 与 ResponseItem 双向转换 |
+| `AnthropicMessagesAdapter` | Anthropic Messages 兼容 endpoint | content blocks/tool_use/tool_result 与 canonical item 双向转换 |
+| `GeminiNativeAdapter` | Google Gemini Native endpoint | contents/functionCall/functionResponse 与 canonical item 双向转换 |
 
 统一 adapter contract 只承担三件事：把 canonical request 编码为厂商请求、把厂商 stream 解码为 `ResponseEvent`、返回经过 probe 验证的 capability profile。adapter 不执行工具、不决定权限、不维护第二份会话历史，也不改变 Agent Loop 的结束条件。
 
@@ -904,11 +919,11 @@ adapter crate 必须位于独立 `coomi-provider-adapters` 边界，不允许在
 
 建议首版分层交付：
 
-1. **稳定支持**：OpenAI Responses；
-2. **高优先级稳定候选**：MiniMax Responses，通过 conformance 后启用；
-3. **兼容支持**：DeepSeek、GLM 的 OpenAI Chat tool adapter，通过具体模型测试后启用；
-4. **实验支持**：MiMo，默认关闭，探测通过后用户显式启用；
-5. **暂不支持**：Anthropic Messages wire、自定义文本工具格式和没有 native tool call 的 endpoint。
+1. **稳定协议**：OpenAI Responses；
+2. **核心兼容协议**：OpenAI Compatible，当前主验证目标为 `opencode-go/deepseek-v4-flash`；
+3. **兼容协议**：Anthropic Messages 与 Google Gemini Native，按具体 endpoint/model 探测后启用；
+4. **Provider 候选**：MiniMax、DeepSeek、GLM、MiMo，兼容等级由 endpoint + model + API version 的实测结果决定；
+5. **明确不支持**：自定义文本工具格式和没有 native tool call 的 endpoint。
 
 provider adapter 是首版受控范围，不恢复当前 Python `GenericProvider` 的“尽量猜测”策略。
 

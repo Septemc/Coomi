@@ -20,7 +20,9 @@ codex-config = { workspace = true }
 codex-exec = { workspace = true }
 codex-tui = { workspace = true }
 codex-utils-cli = { workspace = true }
+coomi-provider-adapters = { workspace = true }
 dirs = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

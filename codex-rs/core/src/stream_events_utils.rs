@@ -296,6 +296,16 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            if completed_tool_output_exists(ctx.sess.clone_history().await.raw_items(), &item) {
+                warn!(
+                    call_id = call.call_id,
+                    tool_name = %call.tool_name,
+                    "ignored duplicate tool call after a completed output"
+                );
+                output.needs_follow_up = true;
+                return Ok(output);
+            }
+
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
@@ -387,6 +397,46 @@ pub(crate) async fn handle_output_item_done(
     }
 
     Ok(output)
+}
+
+fn completed_tool_output_exists(history: &[ResponseItem], item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        } => history.iter().any(|history_item| {
+            matches!(
+                history_item,
+                ResponseItem::FunctionCallOutput {
+                    call_id: completed_call_id,
+                    ..
+                } if completed_call_id == call_id
+            )
+        }),
+        ResponseItem::CustomToolCall { call_id, .. } => history.iter().any(|history_item| {
+            matches!(
+                history_item,
+                ResponseItem::CustomToolCallOutput {
+                    call_id: completed_call_id,
+                    ..
+                } if completed_call_id == call_id
+            )
+        }),
+        ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => history.iter().any(|history_item| {
+            matches!(
+                history_item,
+                ResponseItem::ToolSearchOutput {
+                    call_id: Some(completed_call_id),
+                    ..
+                } if completed_call_id == call_id
+            )
+        }),
+        _ => false,
+    }
 }
 
 pub(crate) async fn handle_non_tool_response_item(
