@@ -1,6 +1,6 @@
 # Coomi Rust 0729 重构计划
 
-> 状态：方案评审稿 v0.2
+> 状态：实施基线 v0.2（P0/P1 进行中）
 >
 > 编制日期：2026-07-29
 >
@@ -23,7 +23,17 @@
 3. 在不破坏核心边界的前提下，融入 Coomi 的流程透明、成本可视化、Memory/Skill/MCP 管理中心和品牌化 TUI。
 4. 最终产品安装、运行和测试关键路径不依赖 Python 运行时。
 
-本文档确认后，才进入 `coomi-rs-0729` 分支创建、上游源码导入和代码实施阶段。本次文档工作本身不创建该分支。
+实施已于 2026-07-29 在 `coomi-rs-0729` 分支启动。固定上游快照、来源记录、Rust 工具链和首批 Coomi-owned crate 的实际状态见同目录的《实施状态》和 `adr/`；本文仍是范围、阶段和验收标准的主基线。
+
+### 1.1 当前实施状态（2026-07-30）
+
+- 已固定并导入 `openai/codex@9a6668f674d74b35418fa534b3b6285a315d0765` 的 `codex-rs/`，5,394 个文件逐路径 SHA-256 差异为 0；
+- 已将纯上游快照独立提交为 `3e788b384c2c796c5288672d5c49a04fa47de45c`；
+- 已安装并验证 Rust 1.95.0、rustfmt、Clippy 和 Windows MSVC x64 工具链；
+- 已建立 `coomi-cli` 与 `coomi-provider-adapters`，通过 `cargo check`、5 个单元测试和严格 Clippy；
+- `coomi` 已直接链接 Codex TUI/exec crate，并使用独立 `~/.coomi` 配置根；
+- `coomi --version`、`--help`、`exec --help` 和 `resume --help` 已通过本地 binary 验证，帮助页无 Codex 品牌残留；
+- P0 动态成本基线、provider C01-C10 探测和 P1 mock Responses Turn 尚未完成，不计为已验收。
 
 ## 2. 执行摘要
 

@@ -1,0 +1,13 @@
+schema_version = 1
+source_repository = "https://github.com/openai/codex.git"
+source_commit = "9a6668f674d74b35418fa534b3b6285a315d0765"
+source_path = "codex-rs"
+destination_path = "codex-rs"
+import_commit = "3e788b384c2c796c5288672d5c49a04fa47de45c"
+license = "Apache-2.0"
+license_file = "LICENSES/Apache-2.0.txt"
+notice_file = "LICENSES/OpenAI-Codex-NOTICE.txt"
+imported_file_count = 5394
+verification_algorithm = "SHA-256"
+verification_differences = 0
+verified_date = "2026-07-29"
