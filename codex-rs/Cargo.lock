@@ -4775,6 +4775,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "coomi-cli"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-arg0",
+ "codex-config",
+ "codex-exec",
+ "codex-tui",
+ "codex-utils-cli",
+ "dirs",
+ "tempfile",
+]
+
+[[package]]
+name = "coomi-provider-adapters"
+version = "0.0.0"
+dependencies = [
+ "codex-api",
+ "codex-protocol",
+ "codex-tools",
+ "futures",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

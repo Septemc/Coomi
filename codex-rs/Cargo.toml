@@ -29,6 +29,8 @@ members = [
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
     "cli",
+    "coomi-cli",
+    "coomi-provider-adapters",
     "collaboration-mode-templates",
     "connectors",
     "config",
@@ -159,6 +161,7 @@ codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
+coomi-provider-adapters = { path = "coomi-provider-adapters" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-config = { path = "cloud-config" }

@@ -1,0 +1,17 @@
+[package]
+name = "coomi-provider-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-api = { workspace = true }
+codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
+futures = { workspace = true }
+
+[lib]
+doctest = false
