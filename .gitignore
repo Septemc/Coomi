@@ -79,3 +79,12 @@ ssh_out.txt
 
 # Other files
 docs/
+
+# Track the Rust 0729 refactor plan while keeping other local docs ignored.
+!docs/
+docs/*
+!docs/重构文档/
+docs/重构文档/*
+!docs/重构文档/0729重构文档/
+docs/重构文档/0729重构文档/*
+!docs/重构文档/0729重构文档/Coomi-Rust-0729-重构计划.md
