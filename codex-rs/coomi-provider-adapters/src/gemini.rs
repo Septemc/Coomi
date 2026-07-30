@@ -11,6 +11,7 @@ use crate::common::function_tool_parts;
 use crate::common::integer;
 use crate::common::response_item_kind;
 use crate::common::text_content;
+use crate::common::wire_tool_name;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::protocol::TokenUsage;
@@ -49,7 +50,7 @@ impl WireAdapter for GeminiNativeAdapter {
     ) -> Result<EncodedRequest, AdapterError> {
         let protocol = self.protocol();
         let (system, contents) = encode_contents(protocol, request)?;
-        let declarations = canonical_tools(request)?
+        let declarations = canonical_tools(request, protocol)?
             .iter()
             .map(|tool| {
                 let parts = function_tool_parts(protocol, tool)?;
@@ -173,9 +174,22 @@ fn encode_contents(
         .input
         .iter()
         .filter_map(|item| match item {
-            ResponseItem::FunctionCall { call_id, name, .. } => {
-                Some((call_id.clone(), name.clone()))
-            }
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                namespace,
+                ..
+            } => Some((call_id.clone(), wire_tool_name(namespace.as_deref(), name))),
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            } => Some((call_id.clone(), "tool_search".to_string())),
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                namespace,
+                ..
+            } => Some((call_id.clone(), wire_tool_name(namespace.as_deref(), name))),
             _ => None,
         })
         .collect::<HashMap<_, _>>();
@@ -213,7 +227,10 @@ fn encode_contents(
                 push_parts(&mut contents, role, parts);
             }
             ResponseItem::FunctionCall {
-                name, arguments, ..
+                name,
+                namespace,
+                arguments,
+                ..
             } => {
                 let args: Value = serde_json::from_str(arguments).map_err(|error| {
                     AdapterError::InvalidPayload {
@@ -224,10 +241,40 @@ fn encode_contents(
                 push_parts(
                     &mut contents,
                     "model",
-                    vec![json!({"functionCall": {"name": name, "args": args}})],
+                    vec![json!({
+                        "functionCall": {
+                            "name": wire_tool_name(namespace.as_deref(), name),
+                            "args": args,
+                        }
+                    })],
                 );
             }
+            ResponseItem::ToolSearchCall { arguments, .. } => push_parts(
+                &mut contents,
+                "model",
+                vec![json!({
+                    "functionCall": {"name": "tool_search", "args": arguments}
+                })],
+            ),
+            ResponseItem::CustomToolCall {
+                name,
+                namespace,
+                input,
+                ..
+            } => push_parts(
+                &mut contents,
+                "model",
+                vec![json!({
+                    "functionCall": {
+                        "name": wire_tool_name(namespace.as_deref(), name),
+                        "args": {"input": input},
+                    }
+                })],
+            ),
             ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            }
+            | ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
             } => {
                 let name = call_names
@@ -251,6 +298,28 @@ fn encode_contents(
                         "functionResponse": {
                             "name": name,
                             "response": {"output": output},
+                        }
+                    })],
+                );
+            }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                tools,
+                ..
+            } => {
+                let name = call_names
+                    .get(call_id)
+                    .ok_or_else(|| AdapterError::InvalidPayload {
+                        protocol,
+                        message: format!("tool output `{call_id}` has no matching call"),
+                    })?;
+                push_parts(
+                    &mut contents,
+                    "user",
+                    vec![json!({
+                        "functionResponse": {
+                            "name": name,
+                            "response": {"tools": tools},
                         }
                     })],
                 );

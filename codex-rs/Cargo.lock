@@ -4796,9 +4796,12 @@ name = "coomi-integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-core",
+ "coomi-provider-adapters",
  "core_test_support",
  "serde_json",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -4806,6 +4809,7 @@ name = "coomi-provider-adapters"
 version = "0.0.0"
 dependencies = [
  "async-stream",
+ "axum",
  "codex-api",
  "codex-protocol",
  "codex-tools",
@@ -4815,6 +4819,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
  "url",
 ]
 

@@ -10,6 +10,7 @@ use crate::common::canonical_tools;
 use crate::common::function_tool_parts;
 use crate::common::integer;
 use crate::common::response_item_kind;
+use crate::common::wire_tool_name;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::protocol::TokenUsage;
@@ -61,7 +62,7 @@ impl WireAdapter for AnthropicMessagesAdapter {
     ) -> Result<EncodedRequest, AdapterError> {
         let protocol = self.protocol();
         let (system, messages) = encode_messages(protocol, request)?;
-        let tools = canonical_tools(request)?
+        let tools = canonical_tools(request, protocol)?
             .iter()
             .map(|tool| {
                 let parts = function_tool_parts(protocol, tool)?;
@@ -315,6 +316,7 @@ fn encode_messages(
             }
             ResponseItem::FunctionCall {
                 name,
+                namespace,
                 arguments,
                 call_id,
                 ..
@@ -331,12 +333,45 @@ fn encode_messages(
                     vec![json!({
                         "type": "tool_use",
                         "id": call_id,
-                        "name": name,
+                        "name": wire_tool_name(namespace.as_deref(), name),
                         "input": input,
                     })],
                 );
             }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                arguments,
+                ..
+            } => push_blocks(
+                &mut messages,
+                "assistant",
+                vec![json!({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": "tool_search",
+                    "input": arguments,
+                })],
+            ),
+            ResponseItem::CustomToolCall {
+                name,
+                namespace,
+                input,
+                call_id,
+                ..
+            } => push_blocks(
+                &mut messages,
+                "assistant",
+                vec![json!({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": wire_tool_name(namespace.as_deref(), name),
+                    "input": {"input": input},
+                })],
+            ),
             ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            }
+            | ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
             } => {
                 let content =
@@ -357,6 +392,19 @@ fn encode_messages(
                     })],
                 );
             }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                tools,
+                ..
+            } => push_blocks(
+                &mut messages,
+                "user",
+                vec![json!({
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": serde_json::to_string(tools)?,
+                })],
+            ),
             ResponseItem::Reasoning { .. } => {}
             unsupported => {
                 return Err(AdapterError::UnsupportedInput {

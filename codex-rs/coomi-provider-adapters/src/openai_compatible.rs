@@ -10,8 +10,10 @@ use crate::common::canonical_tools;
 use crate::common::function_tool_parts;
 use crate::common::openai_usage;
 use crate::common::response_item_kind;
+use crate::common::wire_tool_name;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde_json::Value;
@@ -24,6 +26,10 @@ pub struct OpenAiCompatibleAdapter;
 #[derive(Debug, Default)]
 pub struct OpenAiCompatibleDecodeState {
     response_id: Option<String>,
+    reasoning_id: Option<String>,
+    reasoning_started: bool,
+    reasoning_done: bool,
+    reasoning_text: String,
     message_id: Option<String>,
     message_started: bool,
     message_done: bool,
@@ -91,7 +97,7 @@ impl WireAdapter for OpenAiCompatibleAdapter {
     ) -> Result<EncodedRequest, AdapterError> {
         let protocol = self.protocol();
         let messages = encode_messages(protocol, request)?;
-        let tools = canonical_tools(request)?
+        let tools = canonical_tools(request, protocol)?
             .iter()
             .map(|tool| {
                 let parts = function_tool_parts(protocol, tool)?;
@@ -105,9 +111,9 @@ impl WireAdapter for OpenAiCompatibleAdapter {
                         Value::String(description.to_string()),
                     );
                 }
-                if let Some(strict) = parts.strict {
-                    function.insert("strict".to_string(), Value::Bool(strict));
-                }
+                // Chat-compatible providers are not trusted to enforce strict
+                // JSON Schema. Core validates arguments before dispatch.
+                function.insert("strict".to_string(), Value::Bool(false));
                 Ok(json!({"type": "function", "function": function}))
             })
             .collect::<Result<Vec<_>, AdapterError>>()?;
@@ -160,6 +166,8 @@ impl WireAdapter for OpenAiCompatibleAdapter {
                     if let Some(reasoning) = choice.delta.reasoning_content
                         && !reasoning.is_empty()
                     {
+                        start_reasoning(state, &mut events)?;
+                        state.reasoning_text.push_str(&reasoning);
                         events.push(ResponseEvent::ReasoningContentDelta {
                             delta: reasoning,
                             content_index: 0,
@@ -168,11 +176,19 @@ impl WireAdapter for OpenAiCompatibleAdapter {
                     if let Some(content) = choice.delta.content
                         && !content.is_empty()
                     {
+                        finish_reasoning(state, &mut events);
+                        if !state.tool_calls.is_empty() {
+                            return Err(invalid_transition(
+                                "assistant content arrived after a tool call started",
+                            ));
+                        }
                         start_message(state, &mut events);
                         state.text.push_str(&content);
                         events.push(ResponseEvent::OutputTextDelta(content));
                     }
                     for tool_delta in choice.delta.tool_calls {
+                        finish_reasoning(state, &mut events);
+                        finish_message(state, &mut events);
                         decode_tool_delta(state, tool_delta, &mut events)?;
                     }
                     if let Some(reason) = choice.finish_reason {
@@ -209,6 +225,7 @@ fn encode_messages(
             }
             ResponseItem::FunctionCall {
                 name,
+                namespace,
                 arguments,
                 call_id,
                 ..
@@ -218,10 +235,36 @@ fn encode_messages(
                 "tool_calls": [{
                     "id": call_id,
                     "type": "function",
-                    "function": {"name": name, "arguments": arguments},
+                    "function": {
+                        "name": wire_tool_name(namespace.as_deref(), name),
+                        "arguments": arguments,
+                    },
                 }],
             })),
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                arguments,
+                ..
+            } => messages.push(chat_tool_call(
+                call_id,
+                "tool_search",
+                serde_json::to_string(arguments)?,
+            )),
+            ResponseItem::CustomToolCall {
+                name,
+                namespace,
+                input,
+                call_id,
+                ..
+            } => messages.push(chat_tool_call(
+                call_id,
+                &wire_tool_name(namespace.as_deref(), name),
+                serde_json::to_string(&json!({"input": input}))?,
+            )),
             ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            }
+            | ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
             } => {
                 let content =
@@ -238,6 +281,15 @@ fn encode_messages(
                     "content": content,
                 }));
             }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                tools,
+                ..
+            } => messages.push(json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": serde_json::to_string(tools)?,
+            })),
             ResponseItem::Reasoning { .. } => {}
             unsupported => {
                 return Err(AdapterError::UnsupportedInput {
@@ -248,6 +300,18 @@ fn encode_messages(
         }
     }
     Ok(messages)
+}
+
+fn chat_tool_call(call_id: &str, name: &str, arguments: String) -> Value {
+    json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "tool_calls": [{
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        }],
+    })
 }
 
 fn encode_chat_content(
@@ -294,6 +358,83 @@ fn start_message(state: &mut OpenAiCompatibleDecodeState, events: &mut Vec<Respo
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     }));
+}
+
+fn start_reasoning(
+    state: &mut OpenAiCompatibleDecodeState,
+    events: &mut Vec<ResponseEvent>,
+) -> Result<(), AdapterError> {
+    if state.reasoning_started {
+        if state.reasoning_done {
+            return Err(invalid_transition(
+                "reasoning content resumed after the reasoning item completed",
+            ));
+        }
+        return Ok(());
+    }
+    if state.message_started || !state.tool_calls.is_empty() {
+        return Err(invalid_transition(
+            "reasoning content arrived after assistant output started",
+        ));
+    }
+
+    let reasoning_id = state
+        .reasoning_id
+        .get_or_insert_with(|| {
+            state
+                .response_id
+                .as_deref()
+                .map_or_else(|| "rs_coomi_chat".to_string(), |id| format!("rs_{id}"))
+        })
+        .clone();
+    state.reasoning_started = true;
+    events.push(ResponseEvent::OutputItemAdded(ResponseItem::Reasoning {
+        id: Some(ResponseItemId::from_server(reasoning_id)),
+        summary: Vec::new(),
+        content: Some(Vec::new()),
+        encrypted_content: None,
+        internal_chat_message_metadata_passthrough: None,
+    }));
+    Ok(())
+}
+
+fn finish_reasoning(state: &mut OpenAiCompatibleDecodeState, events: &mut Vec<ResponseEvent>) {
+    if !state.reasoning_started || state.reasoning_done {
+        return;
+    }
+    state.reasoning_done = true;
+    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+        id: state.reasoning_id.clone().map(ResponseItemId::from_server),
+        summary: Vec::new(),
+        content: Some(vec![ReasoningItemContent::ReasoningText {
+            text: state.reasoning_text.clone(),
+        }]),
+        encrypted_content: None,
+        internal_chat_message_metadata_passthrough: None,
+    }));
+}
+
+fn finish_message(state: &mut OpenAiCompatibleDecodeState, events: &mut Vec<ResponseEvent>) {
+    if !state.message_started || state.message_done {
+        return;
+    }
+    state.message_done = true;
+    events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
+        id: state.message_id.clone().map(ResponseItemId::from_server),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: state.text.clone(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }));
+}
+
+fn invalid_transition(message: impl Into<String>) -> AdapterError {
+    AdapterError::InvalidPayload {
+        protocol: WireProtocol::OpenAiCompatible,
+        message: message.into(),
+    }
 }
 
 fn decode_tool_delta(
@@ -371,18 +512,8 @@ fn finish_items(
     state: &mut OpenAiCompatibleDecodeState,
     events: &mut Vec<ResponseEvent>,
 ) -> Result<(), AdapterError> {
-    if state.message_started && !state.message_done {
-        state.message_done = true;
-        events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
-            id: state.message_id.clone().map(ResponseItemId::from_server),
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: state.text.clone(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        }));
-    }
+    finish_reasoning(state, events);
+    finish_message(state, events);
     for (index, tool) in &mut state.tool_calls {
         if tool.item_done {
             continue;

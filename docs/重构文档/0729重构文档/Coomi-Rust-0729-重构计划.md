@@ -30,11 +30,13 @@
 - 已固定并导入 `openai/codex@9a6668f674d74b35418fa534b3b6285a315d0765` 的 `codex-rs/`，5,394 个文件逐路径 SHA-256 差异为 0；
 - 已将纯上游快照独立提交为 `3e788b384c2c796c5288672d5c49a04fa47de45c`；
 - 已安装并验证 Rust 1.95.0、rustfmt、Clippy 和 Windows MSVC x64 工具链；
-- 已建立 `coomi-cli`、`coomi-provider-adapters` 与 `coomi-integration-tests`，四种 wire adapter 共用 Codex canonical request/event，并通过 13 个目标测试和严格 Clippy；
+- 已建立 `coomi-cli`、`coomi-provider-adapters` 与 `coomi-integration-tests`，四种 wire adapter 共用 Codex canonical request/event；Embedded Provider Gateway 已接入普通 `coomi exec`、TUI 与 resume；
 - `coomi` 已直接链接 Codex TUI/exec crate，并使用独立 `~/.coomi` 配置根；
 - `coomi --version`、`--help`、`exec --help` 和 `resume --help` 已通过本地 binary 验证，帮助页无 Codex 品牌残留；
-- `opencode-go/deepseek-v4-flash` 已完成首轮真实 C01-C07、C09、C10 探测；C06 证明服务端不保证 strict schema，必须启用客户端参数校验；
-- P1 mock Responses Turn 与 C08 断流工具幂等测试已完成；P0 动态成本基线、完整 C10 边界和普通 Agent Loop 的 adapter 接入仍未完成。
+- `opencode-go/deepseek-v4-flash` 已完成首轮真实 C01-C07、C09、C10 探测；C06 证明服务端不保证 strict schema，客户端现已在审批和执行前统一校验参数；
+- Namespace、ToolSearch 与 Freeform/Custom tool 已实现确定性降级和可逆恢复，未声明工具和畸形参数在协议边界 fail closed；
+- OpenAI Compatible reasoning 已实现 Added → Delta → Done canonical 生命周期，mock Core/Gateway 回归和真实 `coomi exec` 均通过，不再触发 active-item panic；
+- 当前只是 Gateway/Agent Loop 里程碑：P0 动态成本基线、完整 C10 边界、P2 会话全生命周期以及 P3-P8 其余能力仍未完成。
 
 ## 2. 执行摘要
 
@@ -263,6 +265,8 @@ flowchart TB
 - 测试可用 mock client 重放完整会话；
 - 日后可增加 daemon、IDE 或远程控制，而不需要重写 Core；
 - 首版不开放公网监听，不交付 WebSocket daemon，不承担远程鉴权成本。
+
+第三方 provider 的 wire adapter 通过同一进程内 `EmbeddedProviderGateway` 暴露 canonical Responses SSE。CLI/TUI 仍只调用 Codex ModelClient 的 `/responses` 路径；Gateway 才负责 canonical request → provider wire → canonical event 的转换。它不执行工具、不持有第二份 Thread history，也不参与权限或沙箱决策。
 
 ## 7. 功能范围矩阵
 
@@ -660,6 +664,8 @@ adapter 只能做无歧义转换。厂商字段没有 canonical 等价物时，�
 
 这里的“降级”只改变 wire 表达，不改变 ToolRouter、权限、sandbox、输出和事件语义。
 
+2026-07-30 的实现状态：Namespace 名称可逆恢复；ToolSearch 返回必须是可解析且符合其 canonical schema 的 JSON；Freeform/Custom 返回必须精确匹配 `{input:string}`；未声明工具、额外 wrapper 字段和畸形 JSON 均在 adapter 边界拒绝。Core ToolRouter 对普通和 Namespace function 共用客户端 JSON Schema 校验，非法参数不会进入 handler、审批或产生副作用。
+
 ### 12.6 Provider tool conformance suite
 
 provider/model 必须通过自动探测后才能启用工具：
@@ -691,6 +697,8 @@ provider/model 必须通过自动探测后才能启用工具：
 | C10 | 部分通过 | 显式错误响应已验证；超长 schema 和工具数量上限仍需补齐 |
 
 完整真实探测累计 usage 为 input 2,857、cached input 1,536、output 582、total 3,439。该数据只证明协议探测成本，不替代 B01-B10 产品成本基线。
+
+真实 `coomi exec` 也已通过 `deepseek-v4-flash` 验证：进程正常退出并精确输出固定文本。该回合 usage 为 input 11,136、cached input 11,008、output 29（reasoning 21），说明 Gateway/Agent Loop 已可用，但也暴露出约 11K 名义上下文和缺失 model metadata 的后续优化项。
 
 ### 12.7 工具暴露计划
 
@@ -967,7 +975,7 @@ provider adapter 是首版受控范围，不恢复当前 Python `GenericProvider
 
 ### 16.9 Reasoning
 
-保留 reasoning effort 配置和 reasoning token usage 指标，但不展示或持久化隐藏思维链。UI 只展示公开的 reasoning summary、阶段状态和用量数据。第三方 provider 的 `reasoning_content` 等字段只有在语义明确时映射为公开 summary；不得把私有思维内容写入 rollout，也不得为了兼容强制回传厂商不要求的 reasoning 文本。
+保留 reasoning effort 配置和 reasoning token usage 指标。第三方 provider 的 reasoning 流必须先映射成完整 canonical item 生命周期（Added → Delta → Done），再进入 message/tool item；不允许无 active item 的 delta，也不允许正文或工具已经开始后重新打开 reasoning item。UI 只展示 provider 明确允许公开的 reasoning summary、阶段状态和用量数据；隐藏推理内容的展示、持久化与清理策略在 P4/P6 收口，不得为了兼容强制回传厂商不要求的 reasoning 文本。
 
 ## 17. Coomi TUI 重构方案
 

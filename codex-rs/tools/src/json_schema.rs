@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
 const SCHEMA_CHILD_KEYS: [&str; 4] = ["items", "anyOf", "oneOf", "allOf"];
 const COMPOSITION_SCHEMA_KEYS: [&str; 3] = ["anyOf", "oneOf", "allOf"];
+const MAX_SCHEMA_VALIDATION_DEPTH: usize = 128;
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
@@ -182,6 +183,234 @@ impl From<bool> for AdditionalProperties {
 impl From<JsonSchema> for AdditionalProperties {
     fn from(value: JsonSchema) -> Self {
         Self::Schema(Box::new(value))
+    }
+}
+
+/// Validate a JSON value against the canonical tool-schema subset used by Codex.
+///
+/// Providers are not trusted to enforce `strict` schemas. This validator is
+/// intentionally local and deterministic so malformed model arguments can be
+/// returned to the model without executing the tool.
+pub fn validate_json_schema_value(schema: &JsonSchema, value: &JsonValue) -> Result<(), String> {
+    let root_json = serde_json::to_value(schema)
+        .map_err(|error| format!("failed to serialize tool schema for validation: {error}"))?;
+    validate_schema_node(&root_json, schema, value, "$", 0)
+}
+
+fn validate_schema_node(
+    root_json: &JsonValue,
+    schema: &JsonSchema,
+    value: &JsonValue,
+    path: &str,
+    depth: usize,
+) -> Result<(), String> {
+    if depth >= MAX_SCHEMA_VALIDATION_DEPTH {
+        return Err(format!(
+            "{path}: schema validation exceeded maximum depth of {MAX_SCHEMA_VALIDATION_DEPTH}"
+        ));
+    }
+    let child_depth = depth + 1;
+
+    if let Some(schema_ref) = schema.schema_ref.as_deref() {
+        let target = resolve_local_schema_ref(root_json, schema_ref)
+            .ok_or_else(|| format!("{path}: unresolved schema reference `{schema_ref}`"))?;
+        validate_schema_node(root_json, &target, value, path, child_depth)?;
+    }
+
+    if let Some(types) = schema.schema_type.as_ref()
+        && !schema_type_matches(types, value)
+    {
+        return Err(format!(
+            "{path}: expected {}, got {}",
+            schema_type_description(types),
+            json_value_type(value)
+        ));
+    }
+
+    if let Some(allowed) = schema.enum_values.as_ref()
+        && !allowed.iter().any(|candidate| candidate == value)
+    {
+        return Err(format!(
+            "{path}: value is not one of the allowed enum values"
+        ));
+    }
+
+    validate_composition(
+        root_json,
+        schema.any_of.as_deref(),
+        value,
+        path,
+        "anyOf",
+        false,
+        child_depth,
+    )?;
+    validate_composition(
+        root_json,
+        schema.one_of.as_deref(),
+        value,
+        path,
+        "oneOf",
+        true,
+        child_depth,
+    )?;
+    if let Some(all_of) = schema.all_of.as_deref() {
+        for child in all_of {
+            validate_schema_node(root_json, child, value, path, child_depth)?;
+        }
+    }
+
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.required.as_ref() {
+            for name in required {
+                if !object.contains_key(name) {
+                    return Err(format!("{path}: missing required property `{name}`"));
+                }
+            }
+        }
+        let properties = schema.properties.as_ref();
+        for (name, child_value) in object {
+            let child_path = format!("{path}.{}", escape_path_component(name));
+            if let Some(child_schema) = properties.and_then(|properties| properties.get(name)) {
+                validate_schema_node(
+                    root_json,
+                    child_schema,
+                    child_value,
+                    &child_path,
+                    child_depth,
+                )?;
+                continue;
+            }
+            match schema.additional_properties.as_ref() {
+                Some(AdditionalProperties::Boolean(false)) => {
+                    return Err(format!("{path}: unexpected property `{name}`"));
+                }
+                Some(AdditionalProperties::Schema(child_schema)) => {
+                    validate_schema_node(
+                        root_json,
+                        child_schema,
+                        child_value,
+                        &child_path,
+                        child_depth,
+                    )?;
+                }
+                Some(AdditionalProperties::Boolean(true)) | None => {}
+            }
+        }
+    }
+
+    if let Some(items) = schema.items.as_deref()
+        && let Some(values) = value.as_array()
+    {
+        for (index, child) in values.iter().enumerate() {
+            validate_schema_node(
+                root_json,
+                items,
+                child,
+                &format!("{path}[{index}]"),
+                child_depth,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_composition(
+    root_json: &JsonValue,
+    schemas: Option<&[JsonSchema]>,
+    value: &JsonValue,
+    path: &str,
+    keyword: &str,
+    exactly_one: bool,
+    depth: usize,
+) -> Result<(), String> {
+    let Some(schemas) = schemas else {
+        return Ok(());
+    };
+    let matches = schemas
+        .iter()
+        .filter(|schema| validate_schema_node(root_json, schema, value, path, depth).is_ok())
+        .count();
+    let valid = if exactly_one {
+        matches == 1
+    } else {
+        matches > 0
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "{path}: failed {keyword} validation ({matches} matching branches)"
+        ))
+    }
+}
+
+fn resolve_local_schema_ref(root_json: &JsonValue, schema_ref: &str) -> Option<JsonSchema> {
+    let fragment = schema_ref.strip_prefix('#')?;
+    let pointer = urlencoding::decode(fragment).ok()?;
+    if !pointer.is_empty() && !pointer.starts_with('/') {
+        return None;
+    }
+    let target = if pointer.is_empty() {
+        root_json
+    } else {
+        root_json.pointer(pointer.as_ref())?
+    };
+    serde_json::from_value(target.clone()).ok()
+}
+
+fn schema_type_matches(schema_type: &JsonSchemaType, value: &JsonValue) -> bool {
+    match schema_type {
+        JsonSchemaType::Single(expected) => primitive_type_matches(*expected, value),
+        JsonSchemaType::Multiple(expected) => expected
+            .iter()
+            .any(|expected| primitive_type_matches(*expected, value)),
+    }
+}
+
+fn primitive_type_matches(expected: JsonSchemaPrimitiveType, value: &JsonValue) -> bool {
+    match expected {
+        JsonSchemaPrimitiveType::String => value.is_string(),
+        JsonSchemaPrimitiveType::Number => value.is_number(),
+        JsonSchemaPrimitiveType::Boolean => value.is_boolean(),
+        JsonSchemaPrimitiveType::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        JsonSchemaPrimitiveType::Object => value.is_object(),
+        JsonSchemaPrimitiveType::Array => value.is_array(),
+        JsonSchemaPrimitiveType::Null => value.is_null(),
+    }
+}
+
+fn schema_type_description(schema_type: &JsonSchemaType) -> String {
+    match schema_type {
+        JsonSchemaType::Single(expected) => format!("{expected:?}").to_ascii_lowercase(),
+        JsonSchemaType::Multiple(expected) => expected
+            .iter()
+            .map(|expected| format!("{expected:?}").to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join(" or "),
+    }
+}
+
+fn json_value_type(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+fn escape_path_component(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        value.to_string()
+    } else {
+        format!("[{value:?}]")
     }
 }
 

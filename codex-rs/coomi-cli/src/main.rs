@@ -10,6 +10,7 @@ use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_utils_cli::CliConfigOverrides;
 use coomi_provider_adapters::ConformanceStatus;
+use coomi_provider_adapters::EmbeddedProviderGateway;
 use coomi_provider_adapters::HttpProviderTransport;
 use coomi_provider_adapters::ProviderRegistry;
 use coomi_provider_adapters::run_basic_conformance;
@@ -19,6 +20,8 @@ use std::path::PathBuf;
 
 const COOMI_HOME_ENV: &str = "COOMI_HOME";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
+const DEFAULT_PROVIDER_ID: &str = "opencode-go";
+const RUNTIME_PROVIDER_ID: &str = "coomi-runtime";
 const CONFIG_HELP: &str = "Override a configuration value that would otherwise be loaded from `$COOMI_HOME/config.toml`. Use a dotted path for nested values; values are parsed as TOML when possible";
 const PROFILE_HELP: &str =
     "Layer `$COOMI_HOME/<name>.config.toml` on top of the base user configuration";
@@ -115,6 +118,49 @@ struct ProviderTestCommand {
     full: bool,
 }
 
+#[derive(Debug)]
+struct RuntimeProvider {
+    _gateway: EmbeddedProviderGateway,
+    model: String,
+    config_overrides: CliConfigOverrides,
+}
+
+impl RuntimeProvider {
+    async fn start(coomi_home: &Path, model_override: Option<&str>) -> anyhow::Result<Self> {
+        let registry_path = coomi_home.join("config").join("providers.json");
+        let registry = ProviderRegistry::load(&registry_path)?;
+        let mut provider = registry
+            .provider(DEFAULT_PROVIDER_ID)
+            .with_context(|| {
+                format!(
+                    "required provider `{DEFAULT_PROVIDER_ID}` was not found in {}",
+                    registry_path.display()
+                )
+            })?
+            .clone();
+        if let Some(model) = model_override {
+            provider.model = model.to_string();
+        }
+
+        let model = provider.model.clone();
+        let display_name = format!("Coomi {}", provider.display);
+        let gateway = EmbeddedProviderGateway::start(HttpProviderTransport::new(provider)?).await?;
+        let config_overrides =
+            runtime_config_overrides(gateway.base_url().as_str(), &display_name)?;
+        Ok(Self {
+            _gateway: gateway,
+            model,
+            config_overrides,
+        })
+    }
+
+    fn apply(&self, overrides: &mut CliConfigOverrides) {
+        overrides
+            .raw_overrides
+            .extend(self.config_overrides.raw_overrides.iter().cloned());
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let coomi_home = resolve_coomi_home()?;
     install_codex_compatibility_environment(&coomi_home);
@@ -134,6 +180,12 @@ async fn run_cli(arg0_paths: Arg0DispatchPaths, coomi_home: PathBuf) -> anyhow::
             interactive
                 .config_overrides
                 .prepend_root_overrides(config_overrides);
+            let runtime_provider =
+                RuntimeProvider::start(&coomi_home, interactive.model.as_deref()).await?;
+            if interactive.model.is_none() {
+                interactive.model = Some(runtime_provider.model.clone());
+            }
+            runtime_provider.apply(&mut interactive.config_overrides);
             let exit_info = codex_tui::run_main(
                 interactive,
                 arg0_paths,
@@ -151,6 +203,12 @@ async fn run_cli(arg0_paths: Arg0DispatchPaths, coomi_home: PathBuf) -> anyhow::
             exec_cli
                 .config_overrides
                 .prepend_root_overrides(config_overrides);
+            let runtime_provider =
+                RuntimeProvider::start(&coomi_home, exec_cli.model.as_deref()).await?;
+            if exec_cli.model.is_none() {
+                exec_cli.model = Some(runtime_provider.model.clone());
+            }
+            runtime_provider.apply(&mut exec_cli.config_overrides);
             codex_exec::run_main(*exec_cli, arg0_paths).await
         }
         Some(Command::Resume(resume)) => {
@@ -165,6 +223,12 @@ async fn run_cli(arg0_paths: Arg0DispatchPaths, coomi_home: PathBuf) -> anyhow::
             interactive
                 .config_overrides
                 .prepend_root_overrides(config_overrides);
+            let runtime_provider =
+                RuntimeProvider::start(&coomi_home, interactive.model.as_deref()).await?;
+            if interactive.model.is_none() {
+                interactive.model = Some(runtime_provider.model.clone());
+            }
+            runtime_provider.apply(&mut interactive.config_overrides);
             let exit_info = codex_tui::run_main(
                 interactive,
                 arg0_paths,
@@ -176,6 +240,27 @@ async fn run_cli(arg0_paths: Arg0DispatchPaths, coomi_home: PathBuf) -> anyhow::
         }
         Some(Command::Provider(provider)) => run_provider_command(provider, &coomi_home).await,
     }
+}
+
+fn runtime_config_overrides(
+    base_url: &str,
+    display_name: &str,
+) -> anyhow::Result<CliConfigOverrides> {
+    let provider_id = serde_json::to_string(RUNTIME_PROVIDER_ID)?;
+    let display_name = serde_json::to_string(display_name)?;
+    let base_url = serde_json::to_string(base_url)?;
+    Ok(CliConfigOverrides {
+        raw_overrides: vec![
+            format!("model_provider={provider_id}"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.name={display_name}"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.base_url={base_url}"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.wire_api=\"responses\""),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.requires_openai_auth=false"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.supports_websockets=false"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.request_max_retries=0"),
+            format!("model_providers.{RUNTIME_PROVIDER_ID}.stream_max_retries=2"),
+        ],
+    })
 }
 
 async fn run_provider_command(command: ProviderCommand, coomi_home: &Path) -> anyhow::Result<()> {

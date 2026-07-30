@@ -4,8 +4,120 @@ use super::JsonSchemaPrimitiveType;
 use super::JsonSchemaType;
 use super::parse_tool_input_schema;
 use super::parse_tool_input_schema_without_compaction;
+use super::validate_json_schema_value;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+
+#[test]
+fn validates_required_enum_additional_properties_and_nested_arrays() {
+    let schema: JsonSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["read", "write"]},
+            "items": {"type": "array", "items": {"type": "integer"}}
+        },
+        "required": ["mode", "items"],
+        "additionalProperties": false
+    }))
+    .expect("schema");
+
+    validate_json_schema_value(
+        &schema,
+        &serde_json::json!({"mode": "read", "items": [1, 2]}),
+    )
+    .expect("valid arguments");
+    assert!(
+        validate_json_schema_value(
+            &schema,
+            &serde_json::json!({"mode": "delete", "items": [1]})
+        )
+        .expect_err("enum must fail")
+        .contains("enum")
+    );
+    assert!(
+        validate_json_schema_value(&schema, &serde_json::json!({"mode": "read"}))
+            .expect_err("required must fail")
+            .contains("items")
+    );
+    assert!(
+        validate_json_schema_value(
+            &schema,
+            &serde_json::json!({"mode": "read", "items": [1], "extra": true})
+        )
+        .expect_err("additional property must fail")
+        .contains("extra")
+    );
+    assert!(
+        validate_json_schema_value(
+            &schema,
+            &serde_json::json!({"mode": "read", "items": [1.5]})
+        )
+        .expect_err("array item type must fail")
+        .contains("[0]")
+    );
+}
+
+#[test]
+fn validates_local_refs_and_schema_composition() {
+    let schema: JsonSchema = serde_json::from_value(serde_json::json!({
+        "$defs": {
+            "identifier": {"type": "string", "enum": ["alpha"]}
+        },
+        "type": "object",
+        "properties": {
+            "id": {"$ref": "#/$defs/identifier"},
+            "value": {"oneOf": [{"type": "integer"}, {"type": "string"}]}
+        },
+        "required": ["id", "value"]
+    }))
+    .expect("schema");
+
+    validate_json_schema_value(&schema, &serde_json::json!({"id": "alpha", "value": 3}))
+        .expect("valid refs and composition");
+    assert!(
+        validate_json_schema_value(&schema, &serde_json::json!({"id": "beta", "value": true}))
+            .is_err()
+    );
+}
+
+#[test]
+fn validates_refs_to_nested_definition_members() {
+    let schema: JsonSchema = serde_json::from_value(serde_json::json!({
+        "$defs": {
+            "User": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"}
+                }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "name": {"$ref": "#/$defs/User/properties/name"}
+        },
+        "required": ["name"]
+    }))
+    .expect("schema");
+
+    validate_json_schema_value(&schema, &serde_json::json!({"name": "Coomi"}))
+        .expect("nested ref should validate");
+    assert!(validate_json_schema_value(&schema, &serde_json::json!({"name": 7})).is_err());
+}
+
+#[test]
+fn rejects_cyclic_local_refs_at_a_bounded_depth() {
+    let schema: JsonSchema = serde_json::from_value(serde_json::json!({
+        "$defs": {
+            "loop": {"$ref": "#/$defs/loop"}
+        },
+        "$ref": "#/$defs/loop"
+    }))
+    .expect("schema");
+
+    let error = validate_json_schema_value(&schema, &serde_json::json!({}))
+        .expect_err("cyclic refs must fail closed");
+    assert!(error.contains("maximum depth"), "{error}");
+}
 
 // Tests in this section exercise normalization transforms that mutate badly
 // formed JSON for consumption by the Responses API.

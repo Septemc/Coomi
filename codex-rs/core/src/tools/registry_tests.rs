@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::step_context::StepContext;
 use pretty_assertions::assert_eq;
+use std::sync::atomic::AtomicUsize;
 
 struct TestHandler {
     tool_name: codex_tools::ToolName,
@@ -28,6 +29,98 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 }
 
 impl CoreToolRuntime for TestHandler {}
+
+struct SchemaGuardHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ToolExecutor<ToolInvocation> for SchemaGuardHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        codex_tools::ToolName::plain("schema_guard")
+    }
+
+    fn spec(&self) -> codex_tools::ToolSpec {
+        codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: "schema_guard".to_string(),
+            description: "Schema validation probe.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: serde_json::from_value(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["safe"]}
+                },
+                "required": ["mode"],
+                "additionalProperties": false
+            }))
+            .expect("schema"),
+            output_schema: None,
+        })
+    }
+
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_text(
+                    "executed".to_string(),
+                    Some(true),
+                )) as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
+    }
+}
+
+impl CoreToolRuntime for SchemaGuardHandler {}
+
+struct NamespacedSchemaGuardHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ToolExecutor<ToolInvocation> for NamespacedSchemaGuardHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        codex_tools::ToolName::namespaced("guard", "schema")
+    }
+
+    fn spec(&self) -> codex_tools::ToolSpec {
+        codex_tools::ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
+            name: "guard".to_string(),
+            description: "Namespaced schema validation probe.".to_string(),
+            tools: vec![codex_tools::ResponsesApiNamespaceTool::Function(
+                codex_tools::ResponsesApiTool {
+                    name: "schema".to_string(),
+                    description: "Validate namespaced arguments.".to_string(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "mode": {"type": "string", "enum": ["safe"]}
+                        },
+                        "required": ["mode"],
+                        "additionalProperties": false
+                    }))
+                    .expect("schema"),
+                    output_schema: None,
+                },
+            )],
+        })
+    }
+
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_text(
+                    "executed".to_string(),
+                    Some(true),
+                )) as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
+    }
+}
+
+impl CoreToolRuntime for NamespacedSchemaGuardHandler {}
 
 #[derive(Clone)]
 enum LifecycleTestResult {
@@ -369,6 +462,73 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
         result.code_mode_result(),
         serde_json::json!({ "typed": true })
     );
+}
+
+#[tokio::test]
+async fn invalid_schema_arguments_are_rejected_before_tool_execution() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = Arc::new(SchemaGuardHandler {
+        calls: Arc::clone(&calls),
+    }) as Arc<dyn CoreToolRuntime>;
+    let tool_name = handler.tool_name();
+    let registry = ToolRegistry::new(HashMap::from([(tool_name.clone(), handler)]));
+    let invocation = ToolInvocation {
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({"mode": "unsafe"}).to_string(),
+        },
+        ..test_invocation(session, turn, "schema-call", tool_name)
+    };
+
+    let error = match registry
+        .dispatch_any_with_terminal_outcome(invocation, None)
+        .await
+    {
+        Ok(_) => panic!("invalid arguments must fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("allowed enum values"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn invalid_namespaced_schema_arguments_are_rejected_before_tool_execution() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = Arc::new(NamespacedSchemaGuardHandler {
+        calls: Arc::clone(&calls),
+    }) as Arc<dyn CoreToolRuntime>;
+    let tool_name = handler.tool_name();
+    let registry = ToolRegistry::new(HashMap::from([(tool_name.clone(), handler)]));
+    let invocation = ToolInvocation {
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({
+                "mode": "safe",
+                "provider_invented_field": true
+            })
+            .to_string(),
+        },
+        ..test_invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "namespace-schema-call",
+            tool_name,
+        )
+    };
+
+    let error = match registry
+        .dispatch_any_with_terminal_outcome(invocation, None)
+        .await
+    {
+        Ok(_) => panic!("invalid namespaced arguments must fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("unexpected property"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

@@ -262,6 +262,23 @@ impl ModelProvider for ConfiguredModelProvider {
         &self.info
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        // Hosted Responses tools execute inside the upstream service. A generic
+        // configured provider must not inherit them merely because its client
+        // transport speaks Responses. Namespace tools remain client-executed and
+        // can be reduced by a protocol gateway without changing ToolRouter.
+        let first_party_hosted_tools = self.info.is_openai()
+            || codex_api::is_azure_responses_provider(
+                &self.info.name,
+                self.info.base_url.as_deref(),
+            );
+        ProviderCapabilities {
+            namespace_tools: true,
+            image_generation: first_party_hosted_tools,
+            web_search: first_party_hosted_tools,
+        }
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
@@ -498,13 +515,30 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_uses_default_capabilities() {
+    fn first_party_configured_provider_uses_hosted_capabilities() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn third_party_configured_provider_disables_hosted_capabilities() {
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                namespace_tools: true,
+                image_generation: false,
+                web_search: false,
+            }
+        );
     }
 
     #[test]

@@ -34,9 +34,11 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_shell_script;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
+use codex_tools::validate_json_schema_value;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::instrument;
@@ -526,6 +528,52 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        if let ToolPayload::Function { arguments } = &invocation.payload
+            && let Some(parameters) = function_parameters(tool.spec(), &tool_name)
+        {
+            let arguments_value: Value = match serde_json::from_str(arguments) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    let message = format!(
+                        "invalid arguments for tool {tool_name}: expected a JSON object: {error}"
+                    );
+                    let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+                    otel.tool_result_with_tags(
+                        tool_name_flat.as_ref(),
+                        &call_id_owned,
+                        log_payload.as_ref(),
+                        Duration::ZERO,
+                        /*success*/ false,
+                        &message,
+                        &tool_result_tags,
+                        &extra_trace_fields,
+                    );
+                    let err = FunctionCallError::RespondToModel(message);
+                    dispatch_trace.record_failed(&err);
+                    return Err(err);
+                }
+            };
+            if let Err(error) = validate_json_schema_value(&parameters, &arguments_value) {
+                let message = format!(
+                    "invalid arguments for tool {tool_name}: {error}. Correct the arguments and call the tool again."
+                );
+                let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+                otel.tool_result_with_tags(
+                    tool_name_flat.as_ref(),
+                    &call_id_owned,
+                    log_payload.as_ref(),
+                    Duration::ZERO,
+                    /*success*/ false,
+                    &message,
+                    &tool_result_tags,
+                    &extra_trace_fields,
+                );
+                let err = FunctionCallError::RespondToModel(message);
+                dispatch_trace.record_failed(&err);
+                return Err(err);
+            }
+        }
+
         notify_tool_start(&invocation).await;
 
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
@@ -719,6 +767,24 @@ impl ToolRegistry {
                 Err(err)
             }
         }
+    }
+}
+
+fn function_parameters(spec: ToolSpec, tool_name: &ToolName) -> Option<codex_tools::JsonSchema> {
+    match spec {
+        ToolSpec::Function(function) => Some(function.parameters),
+        ToolSpec::Namespace(namespace)
+            if tool_name.namespace.as_deref() == Some(namespace.name.as_str()) =>
+        {
+            namespace.tools.into_iter().find_map(|tool| {
+                let ResponsesApiNamespaceTool::Function(function) = tool;
+                (function.name == tool_name.name).then_some(function.parameters)
+            })
+        }
+        ToolSpec::Namespace(_)
+        | ToolSpec::ToolSearch { .. }
+        | ToolSpec::WebSearch { .. }
+        | ToolSpec::Freeform(_) => None,
     }
 }
 

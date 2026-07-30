@@ -1,6 +1,9 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ReasoningItemContent;
 use codex_tools::AdditionalProperties;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::create_tools_raw_json_for_responses_api;
@@ -56,6 +59,15 @@ fn canonical_request(input: Vec<ResponseItem>) -> Result<ResponsesApiRequest, se
         text: None,
         client_metadata: None,
     })
+}
+
+fn request_with_tools(
+    input: Vec<ResponseItem>,
+    tools: Vec<ToolSpec>,
+) -> Result<ResponsesApiRequest, serde_json::Error> {
+    let mut request = canonical_request(input)?;
+    request.tools = Some(create_tools_raw_json_for_responses_api(&tools)?.into());
+    Ok(request)
 }
 
 fn user_message(text: &str) -> ResponseItem {
@@ -204,6 +216,170 @@ fn openai_compatible_maps_tools_results_and_streamed_arguments() {
             ..
         }] if usage.cached_input_tokens == 4 && usage.total_tokens == 13
     ));
+}
+
+#[test]
+fn openai_compatible_emits_a_complete_reasoning_item_lifecycle() {
+    let adapter = OpenAiCompatibleAdapter;
+    let mut state = OpenAiCompatibleDecodeState::default();
+
+    let first = adapter
+        .decode_event(
+            &mut state,
+            json_event(json!({
+                "id": "chatcmpl_reasoning",
+                "choices": [{
+                    "delta": {"reasoning_content": "inspect "},
+                    "finish_reason": null
+                }]
+            })),
+        )
+        .expect("decode first reasoning chunk");
+    assert!(matches!(
+        first.as_slice(),
+        [
+            ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. }),
+            ResponseEvent::ReasoningContentDelta { delta, content_index: 0 }
+        ] if delta == "inspect "
+    ));
+
+    let second = adapter
+        .decode_event(
+            &mut state,
+            json_event(json!({
+                "id": "chatcmpl_reasoning",
+                "choices": [{
+                    "delta": {"reasoning_content": "then answer"},
+                    "finish_reason": null
+                }]
+            })),
+        )
+        .expect("decode second reasoning chunk");
+    assert!(matches!(
+        second.as_slice(),
+        [ResponseEvent::ReasoningContentDelta { delta, content_index: 0 }]
+            if delta == "then answer"
+    ));
+
+    let answer = adapter
+        .decode_event(
+            &mut state,
+            json_event(json!({
+                "id": "chatcmpl_reasoning",
+                "choices": [{
+                    "delta": {"content": "done"},
+                    "finish_reason": "stop"
+                }]
+            })),
+        )
+        .expect("decode answer chunk");
+    assert!(matches!(
+        answer.as_slice(),
+        [
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                content: Some(reasoning),
+                ..
+            }),
+            ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }),
+            ResponseEvent::OutputTextDelta(delta),
+            ResponseEvent::OutputItemDone(ResponseItem::Message { .. }),
+        ] if reasoning == &[ReasoningItemContent::ReasoningText {
+            text: "inspect then answer".to_string(),
+        }] && delta == "done"
+    ));
+}
+
+#[test]
+fn openai_compatible_rejects_reasoning_after_message_output() {
+    let adapter = OpenAiCompatibleAdapter;
+    let mut state = OpenAiCompatibleDecodeState::default();
+    adapter
+        .decode_event(
+            &mut state,
+            json_event(json!({
+                "id": "chatcmpl_late_reasoning",
+                "choices": [{"delta": {"content": "answer"}, "finish_reason": null}]
+            })),
+        )
+        .expect("decode answer chunk");
+
+    let error = adapter
+        .decode_event(
+            &mut state,
+            json_event(json!({
+                "id": "chatcmpl_late_reasoning",
+                "choices": [{
+                    "delta": {"reasoning_content": "too late"},
+                    "finish_reason": null
+                }]
+            })),
+        )
+        .expect_err("late reasoning must fail closed");
+    assert!(matches!(error, AdapterError::InvalidPayload { .. }));
+}
+
+#[test]
+fn non_responses_protocols_reduce_special_tools_reversibly() {
+    let special_tools = vec![
+        ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search deferred tools".to_string(),
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
+                    "query".to_string(),
+                    JsonSchema::string(Some("Search query".to_string())),
+                )]),
+                Some(vec!["query".to_string()]),
+                Some(AdditionalProperties::Boolean(false)),
+            ),
+        },
+        ToolSpec::Freeform(FreeformTool {
+            name: "apply_patch".to_string(),
+            description: "Apply a patch".to_string(),
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        }),
+        ToolSpec::WebSearch {
+            external_web_access: Some(true),
+            indexed_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+    ];
+    let request =
+        request_with_tools(vec![user_message("probe")], special_tools).expect("canonical request");
+
+    let chat = OpenAiCompatibleAdapter
+        .encode_request(&request)
+        .expect("chat reduction");
+    let tools = chat.body["tools"].as_array().expect("chat tools");
+    assert_eq!(tools.len(), 2);
+    assert!(tools.iter().any(|tool| {
+        tool["function"]["name"] == "tool_search" && tool["function"]["strict"] == false
+    }));
+    assert!(tools.iter().any(|tool| {
+        tool["function"]["name"] == "apply_patch"
+            && tool["function"]["parameters"]["required"] == json!(["input"])
+    }));
+
+    let anthropic = AnthropicMessagesAdapter
+        .encode_request(&request)
+        .expect("Anthropic reduction");
+    assert_eq!(anthropic.body["tools"].as_array().map(Vec::len), Some(2));
+    let gemini = GeminiNativeAdapter
+        .encode_request(&request)
+        .expect("Gemini reduction");
+    assert_eq!(
+        gemini.body["tools"][0]["functionDeclarations"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
 }
 
 #[test]
