@@ -26,6 +26,7 @@ MANIFEST
 venv/
 ENV/
 env/
+.venv39/
 
 # IDE
 .vscode/
@@ -33,6 +34,8 @@ env/
 *.swp
 *.swo
 *~
+.codex/
+.agents/
 
 # OS
 .DS_Store
@@ -79,6 +82,7 @@ ssh_out.txt
 
 # Other files
 docs/
+.ruff_cache/
 
 # Track the Rust 0729 refactor plan while keeping other local docs ignored.
 !docs/
@@ -89,7 +93,7 @@ docs/重构文档/*
 docs/重构文档/0729重构文档/*
 !docs/重构文档/0729重构文档/**
 
-# Track the fixed upstream Codex Rust snapshot in full. Nested ignore files
-# still exclude build artifacts such as codex-rs/target/.
-!codex-rs/
-!codex-rs/**
+# Track the Coomi Rust workspace in full. Its nested ignore file excludes
+# build artifacts such as coomi-rs/target/.
+!coomi-rs/
+!coomi-rs/**

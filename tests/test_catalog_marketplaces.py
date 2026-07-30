@@ -30,7 +30,7 @@ from coomi.ui.screens.skill_marketplace_screen import SkillMarketplaceScreen
 
 
 class ScreenHost(App[None]):
-    CSS_PATH = str(Path("coomi/ui/tcss/coomi.tcss").resolve())
+    CSS_PATH = str(Path("coomi-py/coomi/ui/tcss/coomi.tcss").resolve())
 
     def __init__(self, screen) -> None:
         super().__init__()

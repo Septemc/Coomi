@@ -16,7 +16,7 @@ OpenAI Responses 会把 system 消息合并进 instructions；OpenAI Compatible 
 
 ## 2. 主静态 System Prompt（逐字）
 
-来源：coomi/engine/session.py，STATIC_SYSTEM_PROMPT。源码首行末尾的两个空格通过字符串转义保留；下方代码块不显示不可见尾随空格。
+来源：coomi-py/coomi/engine/session.py，STATIC_SYSTEM_PROMPT。源码首行末尾的两个空格通过字符串转义保留；下方代码块不显示不可见尾随空格。
 
 ~~~text
 **You are Coomi Agent. You help users with software engineering tasks.**
@@ -930,16 +930,16 @@ Agent/Task delegation is recognized, but sub-agent execution is not implemented 
 
 ## 11. 源码索引
 
-- 主 System Prompt 与动态拼装：coomi/engine/session.py
-- 普通 Agent 循环和运行时纠错：coomi/engine/loop.py
-- Loop 模式：coomi/engine/loop_runner.py
-- 上下文压缩：coomi/services/context/compressor.py
-- 消息历史修复：coomi/services/context/message_guard.py
-- 记忆提取：coomi/services/memory/extractor.py
-- 记忆召回：coomi/services/memory/recall.py
-- Skill 注入：coomi/services/skills/manager.py
-- 文本工具调用纠错：coomi/services/llm/text_tool_calls.py
-- 工具定义注册：coomi/tools/registry.py 及 coomi/tools 下各工具
-- 工具执行反馈：coomi/engine/tool_executor.py
-- MCP 动态工具定义：coomi/services/mcp/tool_adapter.py
-- 用户输入、Skill/MCP 命令改写和每轮 System Prompt 重建：coomi/ui/textual_app.py
+- 主 System Prompt 与动态拼装：coomi-py/coomi/engine/session.py
+- 普通 Agent 循环和运行时纠错：coomi-py/coomi/engine/loop.py
+- Loop 模式：coomi-py/coomi/engine/loop_runner.py
+- 上下文压缩：coomi-py/coomi/services/context/compressor.py
+- 消息历史修复：coomi-py/coomi/services/context/message_guard.py
+- 记忆提取：coomi-py/coomi/services/memory/extractor.py
+- 记忆召回：coomi-py/coomi/services/memory/recall.py
+- Skill 注入：coomi-py/coomi/services/skills/manager.py
+- 文本工具调用纠错：coomi-py/coomi/services/llm/text_tool_calls.py
+- 工具定义注册：coomi-py/coomi/tools/registry.py 及 coomi-py/coomi/tools 下各工具
+- 工具执行反馈：coomi-py/coomi/engine/tool_executor.py
+- MCP 动态工具定义：coomi-py/coomi/services/mcp/tool_adapter.py
+- 用户输入、Skill/MCP 命令改写和每轮 System Prompt 重建：coomi-py/coomi/ui/textual_app.py

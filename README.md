@@ -179,46 +179,25 @@ python -m coomi
 ## 架构
 
 ```
-coomi/                          # 主包
-├── __init__.py                 # 版本信息
-├── __main__.py                 # python -m coomi 入口
-├── cli.py                      # CLI 入口（coomi 命令）
-├── setup.py                    # 首次配置引导
-├── types.py                    # Message, Session, ToolCall, LLMResponse
+coomi-py/                       # Python 版本
+└── coomi/                      # 可导入主包（import coomi）
+    ├── __init__.py             # 版本信息
+    ├── __main__.py             # python -m coomi 入口
+    ├── cli.py                  # CLI 入口（coomi 命令）
+    ├── first_run.py            # 首次配置引导
+    ├── types.py                # Message, Session, ToolCall, LLMResponse
+    ├── engine/                 # Agent 循环、会话与工具执行
+    ├── services/               # Provider、上下文、Memory、MCP 与 Skill
+    ├── tools/                  # Python 内置工具
+    └── ui/                     # Textual TUI 界面
+
+coomi-rs/                       # Rust 版本
 ├── engine/
-│   ├── loop.py                 # AgentLoop — 感知-决策-执行循环
-│   └── session.py              # SessionManager，System Prompt 构建器
 ├── services/
-│   ├── llm/                    # Provider 层（抽象基类 + 4 种实现）
-│   │   ├── provider.py         # LLMProvider 抽象基类
-│   │   ├── generic.py          # GenericOpenAIProvider（配置驱动）
-│   │   ├── deepseek.py         # DeepSeekProvider（thinking mode）
-│   │   ├── openai.py           # OpenAIResponsesProvider
-│   │   ├── anthropic.py        # AnthropicProvider（可选依赖）
-│   │   ├── factory.py          # Provider 工厂 + Flash 模型降级
-│   │   └── config.py           # ConfigManager（~/.coomi/config/providers.json）
-│   ├── context/
-│   │   ├── compressor.py       # 三层压缩
-│   │   └── cache.py            # 工具结果磁盘缓存
-│   └── memory/
-│       ├── manager.py          # 三层记忆存储
-│       ├── extractor.py        # 对话自动提取
-│       └── recall.py           # 语义记忆召回
-├── tools/                      # 15+ 内置工具
-│   ├── file_ops/               # Read, Write, Edit
-│   ├── search/                 # Glob, Grep
-│   ├── shell/                  # Bash, PowerShell
-│   ├── web/                    # WebFetch, WebSearch
-│   ├── task/                   # TodoWrite
-│   ├── agent/                  # 子 Agent 委托
-│   ├── user/                   # AskUserQuestion
-│   └── workspace/              # Plan 模式（进入/退出）
-└── ui/                         # Textual TUI 界面
-    ├── textual_app.py          # 主应用
-    ├── status_line.py          # 状态栏（模型 + Token 用量）
-    ├── tool_formatter.py       # 工具调用详情格式化
-    ├── screens/                # 屏幕
-    └── widgets/                # 组件
+├── tools/
+├── security/
+├── ui/
+└── catalogs/
 ```
 
 ## 上下文压缩

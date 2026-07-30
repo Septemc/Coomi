@@ -47,7 +47,7 @@ Repository = "https://github.com/Septemc/Coomi"
 Issues = "https://github.com/Septemc/Coomi/issues"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["coomi-py"]
 include = ["coomi*"]
 
 [tool.setuptools.package-data]
@@ -76,5 +76,5 @@ disable_error_code = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["."]
+pythonpath = ["coomi-py"]
 testpaths = ["tests"]

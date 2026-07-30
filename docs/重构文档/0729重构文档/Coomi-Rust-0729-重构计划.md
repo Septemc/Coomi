@@ -82,14 +82,14 @@ Rust/Tokio 主要解决本地启动速度、并发、内存占用、工具调度
 
 当前实现主要由以下部分组成：
 
-- `coomi/engine`：智能体循环、重试、会话、工具执行、后台任务；
-- `coomi/services/context`：压缩、缓存和消息修复；
-- `coomi/services/llm`：OpenAI、Anthropic、DeepSeek、Generic provider；
-- `coomi/services/memory`：抽取、召回和管理；
-- `coomi/services/skills`：Skill 安装、启停和 prompt 注入；
-- `coomi/services/mcp`：MCP 客户端、配置和工具适配；
-- `coomi/security`：权限、hooks 和 shell 安全；
-- `coomi/ui`：Textual TUI、命令、状态面板、管理页面。
+- `coomi-py/coomi/engine`：智能体循环、重试、会话、工具执行、后台任务；
+- `coomi-py/coomi/services/context`：压缩、缓存和消息修复；
+- `coomi-py/coomi/services/llm`：OpenAI、Anthropic、DeepSeek、Generic provider；
+- `coomi-py/coomi/services/memory`：抽取、召回和管理；
+- `coomi-py/coomi/services/skills`：Skill 安装、启停和 prompt 注入；
+- `coomi-py/coomi/services/mcp`：MCP 客户端、配置和工具适配；
+- `coomi-py/coomi/security`：权限、hooks 和 shell 安全；
+- `coomi-py/coomi/ui`：Textual TUI、命令、状态面板、管理页面。
 
 这些能力覆盖面已经较完整，但核心逻辑在 UI、provider、上下文和工具注册之间耦合较多，缺少统一事件协议、精细 token 预算和稳定的工具暴露计划。
 
@@ -110,12 +110,12 @@ Rust/Tokio 主要解决本地启动速度、并发、内存占用、工具调度
 
 对应源码基线包括：
 
-- `coomi/engine/session.py`：大段静态 System Prompt 及动态 Memory/Skill/MCP 注入；
-- `coomi/engine/loop.py`：每轮获取默认工具定义，`MAX_ITERATIONS = 100`，连续 8 次低信息结果才停止；
-- `coomi/engine/tool_executor.py`：`LARGE_RESULT_THRESHOLD = 50 * 1024`；
-- `coomi/services/context/compressor.py`：`COMPRESS_THRESHOLD = 0.9`；
-- `coomi/services/skills/manager.py`：激活 Skill 最多注入 12,000 字符；
-- `coomi/services/llm/openai.py`：把完整消息历史转换为 stateless Responses input，未使用 `prompt_cache_key` 或 `previous_response_id`。
+- `coomi-py/coomi/engine/session.py`：大段静态 System Prompt 及动态 Memory/Skill/MCP 注入；
+- `coomi-py/coomi/engine/loop.py`：每轮获取默认工具定义，`MAX_ITERATIONS = 100`，连续 8 次低信息结果才停止；
+- `coomi-py/coomi/engine/tool_executor.py`：`LARGE_RESULT_THRESHOLD = 50 * 1024`；
+- `coomi-py/coomi/services/context/compressor.py`：`COMPRESS_THRESHOLD = 0.9`；
+- `coomi-py/coomi/services/skills/manager.py`：激活 Skill 最多注入 12,000 字符；
+- `coomi-py/coomi/services/llm/openai.py`：把完整消息历史转换为 stateless Responses input，未使用 `prompt_cache_key` 或 `previous_response_id`。
 
 ### 3.3 无效调用的主要成因
 
