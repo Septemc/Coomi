@@ -36,7 +36,8 @@
 - `opencode-go/deepseek-v4-flash` 已完成首轮真实 C01-C07、C09、C10 探测；C06 证明服务端不保证 strict schema，客户端现已在审批和执行前统一校验参数；
 - Namespace、ToolSearch 与 Freeform/Custom tool 已实现确定性降级和可逆恢复，未声明工具和畸形参数在协议边界 fail closed；
 - OpenAI Compatible reasoning 已实现 Added → Delta → Done canonical 生命周期，mock Core/Gateway 回归和真实 `coomi exec` 均通过，不再触发 active-item panic；
-- 当前只是 Gateway/Agent Loop 里程碑：P0 动态成本基线、完整 C10 边界、P2 会话全生命周期以及 P3-P8 其余能力仍未完成。
+- P2 已证明 Gateway 下 Turn/Item identity、steer、interrupt、rollback、冷 resume 和 fork 直接继承 Codex 状态机仍成立；
+- 当前仍只是 Gateway/Agent Loop 与 P2 核心会话路径里程碑：P0 动态成本基线、完整 C10 边界、崩溃恢复/SQLite 显式验收以及 P3-P8 其余能力仍未完成。
 
 ## 2. 执行摘要
 
@@ -1267,6 +1268,8 @@ provider adapter 是首版受控范围，不恢复当前 Python `GenericProvider
 - 崩溃后可恢复已完成 Items；
 - Thread 状态只有一个真源；
 - 事件顺序 snapshot 稳定。
+
+2026-07-30 进度：Coomi 专属 Gateway 集成测试已验证 Turn/Item ID 与 Started → Delta → Completed → TurnComplete 顺序；steer 进入同一 active Turn 的下一模型请求；interrupt 可取消仍在等待的 Provider 请求；rollback 后的 canonical history 在冷 resume 与 fork 中保持正确。未关闭项是非正常崩溃后的已完成 Item 恢复、SQLite 状态显式断言和事件 snapshot 固化，因此 P2 尚未宣告完成。
 
 ### P3：工具、provider adapter、权限与沙箱（2-3 周）
 

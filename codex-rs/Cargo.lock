@@ -4797,6 +4797,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-core",
+ "codex-protocol",
  "coomi-provider-adapters",
  "core_test_support",
  "serde_json",
