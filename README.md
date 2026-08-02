@@ -40,8 +40,9 @@ irm https://raw.githubusercontent.com/Septemc/Coomi/main/install.ps1 | iex
 | macOS (Apple Silicon) | `coomi-aarch64-apple-darwin.tar.gz` |
 | macOS (Intel) | `coomi-x86_64-apple-darwin.tar.gz` |
 | Linux (x86_64) | `coomi-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux (ARM64) | `coomi-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows (x86_64) | `coomi-x86_64-pc-windows-msvc.zip` |
+
+> Linux ARM64 用户请从源码构建：`cd coomi-rs && cargo build --release`
 
 下载解压后将 `coomi`（或 `coomi.exe`）放入 PATH 目录即可。
 
