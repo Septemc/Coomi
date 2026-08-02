@@ -24,10 +24,6 @@ jobs:
             target: aarch64-apple-darwin
             artifact: coomi-aarch64-apple-darwin
             bin: coomi
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: coomi-x86_64-apple-darwin
-            bin: coomi
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: coomi-x86_64-pc-windows-msvc
