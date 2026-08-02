@@ -20,22 +20,27 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: coomi-x86_64-unknown-linux-gnu
             bin: coomi
+            cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: coomi-aarch64-unknown-linux-gnu
             bin: coomi
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact: coomi-x86_64-apple-darwin
-            bin: coomi
+            cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: coomi-aarch64-apple-darwin
             bin: coomi
+            cross: false
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: coomi-x86_64-apple-darwin
+            bin: coomi
+            cross: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: coomi-x86_64-pc-windows-msvc
             bin: coomi.exe
+            cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -46,18 +51,13 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cross-compile tools (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: matrix.cross
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p ~/.cargo
           echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
-      - name: Install cross-compile tools (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          rustup target add x86_64-apple-darwin
-          rustup target add aarch64-apple-darwin
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -66,9 +66,7 @@ jobs:
 
       - name: Build release binary
         working-directory: coomi-rs
-        env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact (Unix)
         if: matrix.os != 'windows-latest'
