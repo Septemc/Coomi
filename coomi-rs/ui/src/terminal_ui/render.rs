@@ -112,6 +112,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &TuiState) {
     if app.plan_mode_confirm.is_some() {
         render_plan_mode_confirm(frame, sheet, app);
     }
+    if app.pending_update.is_some() {
+        render_update_prompt(frame, sheet, app);
+    }
 }
 
 fn bottom_sheet_height(
@@ -120,7 +123,9 @@ fn bottom_sheet_height(
     composer_height: u16,
     queue_height: u16,
 ) -> u16 {
-    let requested = if app.plan_mode_confirm.is_some() {
+    let requested = if app.pending_update.is_some() {
+        10
+    } else if app.plan_mode_confirm.is_some() {
         9
     } else if app.pending_user_input.is_some() {
         14
@@ -1803,6 +1808,64 @@ fn render_approval(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
                 Span::styled(" confirm   ", Style::default().fg(theme::MUTED)),
                 Span::styled("Esc", theme::key()),
                 Span::styled(" deny", Style::default().fg(theme::MUTED)),
+            ]),
+        ])
+        .wrap(Wrap { trim: true }),
+        inner,
+    );
+}
+
+fn render_update_prompt(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
+    let Some(update) = &app.pending_update else {
+        return;
+    };
+    let popup = popup_rect(area, 72, 10);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::SUCCESS))
+        .title(Span::styled(
+            " Update available ",
+            Style::default().fg(theme::SUCCESS).bold(),
+        ))
+        .style(Style::default().bg(theme::SURFACE).fg(theme::TEXT))
+        .padding(Padding::new(2, 2, 1, 1));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!(
+                "A new version of Coomi is available: {} -> {}",
+                update.current_version, update.latest_version
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    " Yes, open release page ",
+                    if update.selected == super::UpdateChoice::Yes {
+                        theme::selected()
+                    } else {
+                        Style::default().fg(theme::MUTED)
+                    },
+                ),
+                Span::raw("   "),
+                Span::styled(
+                    " Not now ",
+                    if update.selected == super::UpdateChoice::No {
+                        theme::selected()
+                    } else {
+                        Style::default().fg(theme::MUTED)
+                    },
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Up / Down", theme::key()),
+                Span::styled(" choose   ", Style::default().fg(theme::MUTED)),
+                Span::styled("Enter", theme::key()),
+                Span::styled(" confirm   ", Style::default().fg(theme::MUTED)),
+                Span::styled("Esc", theme::key()),
+                Span::styled(" dismiss", Style::default().fg(theme::MUTED)),
             ]),
         ])
         .wrap(Wrap { trim: true }),

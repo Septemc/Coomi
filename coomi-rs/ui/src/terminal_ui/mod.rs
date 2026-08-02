@@ -120,7 +120,11 @@ pub async fn run(cli: &Cli, paths: &RuntimePaths, session: Session) -> Result<()
         while let Ok(runtime_event) = runtime_rx.try_recv() {
             handle_runtime_event(&mut app, runtime_event);
         }
-        if !app.busy && !app.auto_config_busy && app.pending_approval.is_none() {
+        if !app.busy
+            && !app.auto_config_busy
+            && app.pending_approval.is_none()
+            && app.pending_update.is_none()
+        {
             if let Some(prompt) = app.queue.pop_front() {
                 app.input_queue.discard_front(&prompt);
                 start_agent_turn(&mut app, prompt, false, runtime_tx.clone());
@@ -250,6 +254,28 @@ struct PendingApproval {
     reason: String,
     selected: ApprovalChoice,
     responder: Option<oneshot::Sender<bool>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UpdateChoice {
+    Yes,
+    No,
+}
+
+impl UpdateChoice {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Yes => Self::No,
+            Self::No => Self::Yes,
+        }
+    }
+}
+
+struct PendingUpdate {
+    current_version: String,
+    latest_version: String,
+    release_url: String,
+    selected: UpdateChoice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -788,6 +814,7 @@ struct TuiState {
     overlay: Option<Overlay>,
     pending_approval: Option<PendingApproval>,
     pending_user_input: Option<PendingUserInput>,
+    pending_update: Option<PendingUpdate>,
     confirm_delete: Option<DeleteTarget>,
     mcp_form: Option<McpForm>,
     settings: Option<SettingsState>,
@@ -843,6 +870,7 @@ impl TuiState {
             overlay: None,
             pending_approval: None,
             pending_user_input: None,
+            pending_update: None,
             confirm_delete: None,
             mcp_form: None,
             settings: None,
@@ -933,6 +961,7 @@ impl TuiState {
         }
         self.pending_approval.is_none()
             && self.pending_user_input.is_none()
+            && self.pending_update.is_none()
             && self.confirm_delete.is_none()
             && self
                 .overlay
@@ -1588,10 +1617,12 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                     "Update available: {} -> {}",
                     result.current_version, result.latest_version
                 );
-                app.push_notice(
-                    NoticeKind::Warning,
-                    format!("{}  {}", app.update_status, result.release_url),
-                );
+                app.pending_update = Some(PendingUpdate {
+                    current_version: result.current_version,
+                    latest_version: result.latest_version,
+                    release_url: result.release_url,
+                    selected: UpdateChoice::No,
+                });
             }
             Ok(result) => {
                 app.update_status = format!("Coomi {} is current", result.current_version);
@@ -1848,6 +1879,9 @@ fn handle_key(
     key: KeyEvent,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) -> Result<()> {
+    if app.pending_update.is_some() {
+        return handle_update_key(app, key);
+    }
     if app.plan_mode_confirm.is_some() {
         return handle_plan_mode_confirm_key(app, key, runtime_tx);
     }
@@ -2426,6 +2460,62 @@ fn cancel_active_turn(app: &mut TuiState) {
     }
     app.status = "Turn cancelled".into();
     app.push_notice(NoticeKind::Warning, "Active turn cancelled");
+}
+
+fn handle_update_key(app: &mut TuiState, key: KeyEvent) -> Result<()> {
+    let Some(update) = app.pending_update.as_mut() else {
+        return Ok(());
+    };
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.pending_update = None;
+            app.status = "Update dismissed".into();
+        }
+        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            update.selected = update.selected.toggle();
+        }
+        KeyCode::Enter => {
+            let choice = update.selected;
+            let release_url = update.release_url.clone();
+            app.pending_update = None;
+            match choice {
+                UpdateChoice::Yes => {
+                    app.status = "Opening release page in browser".into();
+                    app.push_notice(
+                        NoticeKind::Success,
+                        format!("Opening release page: {release_url}"),
+                    );
+                    let _ = open_url_in_browser(&release_url);
+                }
+                UpdateChoice::No => {
+                    app.status = "Update dismissed".into();
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn open_url_in_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "start";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let cmd = "xdg-open";
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", cmd, url])
+            .spawn()?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(cmd).arg(url).spawn()?;
+    }
+    Ok(())
 }
 
 fn handle_plan_mode_confirm_key(

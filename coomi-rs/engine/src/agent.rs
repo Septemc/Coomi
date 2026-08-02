@@ -286,6 +286,19 @@ impl Agent {
                         .await?;
                     continue;
                 }
+                Err(error) if is_image_unsupported_error(&error) => {
+                    strip_images_from_history(&mut session.messages);
+                    let message = "The current model does not support image recognition. \
+                        Images have been removed from the conversation history. \
+                        Please continue with text-based requests, or switch to a model with vision support.";
+                    session
+                        .messages
+                        .push(ChatMessage::assistant(message, Vec::new()));
+                    observer.on_event(&AgentEvent::Text(message.to_string()));
+                    observer.on_event(&AgentEvent::TurnCompleted(session.usage.clone()));
+                    session.touch();
+                    return Ok(message.to_string());
+                }
                 Err(error) => return Err(AgentError::Provider(error)),
             };
 
@@ -512,6 +525,21 @@ fn is_context_window_error(error: &anyhow::Error) -> bool {
         || value.contains("context length")
         || value.contains("maximum context")
         || value.contains("too many tokens")
+}
+
+fn is_image_unsupported_error(error: &anyhow::Error) -> bool {
+    let value = format!("{error:#}").to_ascii_lowercase();
+    value.contains("image_url")
+        || value.contains("unknown variant") && value.contains("image")
+        || value.contains("vision") && value.contains("not supported")
+        || value.contains("multimodal") && value.contains("not supported")
+        || value.contains("image content") && value.contains("unsupported")
+}
+
+fn strip_images_from_history(messages: &mut Vec<ChatMessage>) {
+    for message in messages.iter_mut() {
+        message.images.clear();
+    }
 }
 
 #[cfg(test)]
