@@ -1,122 +1,69 @@
 # Coomi Agent
 
-一个比较纯净的 AI Agent项目。基于CLI的自主 Agent，能读取文件、编辑代码、执行命令、管理任务。
+一个比较纯净的 AI Agent 项目。基于 CLI 的自主 Agent，能读取文件、编辑代码、执行命令、管理任务。
 
 ![Coomi Agent 终端界面](https://raw.githubusercontent.com/Septemc/Coomi/main/image/README/1780235212332.png)
 
 ## 特性
 
 - **纯净 Agent 设计** — 以开发学习为目标，流程透明，模块边界清晰，便于观察、复盘和二次改造。
-- **核心能力完整** — 覆盖文件操作、搜索、Shell、网页、任务、子 Agent 、 Plan 模式和Loop模式等基础工具链。
-- **可切换的 LLM Provider** — 统一支持 OpenAI Compatible、OpenAI Responses、Anthropic Messages 三种兼容模式。
+- **核心能力完整** — 覆盖文件操作、搜索、Shell、网页、任务、子 Agent、Plan 模式和 Loop 模式等基础工具链。
+- **可切换的 LLM Provider** — 统一支持 OpenAI Compatible、OpenAI Responses、Anthropic Messages、Gemini 四种兼容模式。
 - **上下文与记忆机制** — 提供上下文压缩、记忆管理、语义召回和工具结果缓存等基础工程能力。
-- **流式终端界面** — 基于 Textual 的 TUI，支持流式输出、工具调用提示和状态信息展示。
+- **流式终端界面** — 基于 Ratatui 的 TUI（Rust 版本），支持流式输出、Markdown 渲染、鼠标滚轮、Plan Mode 和状态信息展示。
 - **精选扩展中心** — 在终端内浏览、安装、更新和卸载精选 Skill，并配置和测试热门 MCP Server。
 
-## Skill 与 MCP 管理中心
+## 安装
 
-在主输入框输入 `/`，可以直接选择已启用的 Skill 和 MCP。选择 Skill 后补充任务，例如
-`/skill frontend-design 设计登录页`；它会在当前会话持续激活，每轮显示“Skill frontend-design 已触发”。
-选择 MCP 会进入操作提示，例如 `/mcp memory 保存信息 我的项目名称是 Coomi`。界面中的“已选择”只表示工具可用，
-只有出现“正在调用”和“调用成功”才表示 MCP 工具真实执行。可使用 `/skill deactivate all` 和
-`/mcp deactivate all` 清除当前会话状态。
+### 一键安装（推荐）
 
-也可以让 Coomi 联网检索合适的 Skill 或 MCP。推荐结果会附带适配 Coomi 的安装内容：Skill 使用可验证的
-GitHub 地址或本地目录；MCP 使用完整 JSON、服务 URL 或 `/mcp add` 命令，并说明依赖、环境变量、权限和验证方式。
-
-在主界面按 `F3` 打开 Settings，然后选择“管理 Skill”或“管理 MCP”。管理页面完全支持键盘操作：
-
-| 按键 | 行为 |
-| --- | --- |
-| `↑` / `↓` | 移动选中项，支持首尾循环 |
-| `Enter` | 安装；已安装时检查更新；发现更新后应用更新；MCP 中用于配置或测试并刷新工具 |
-| `Delete` | 进入卸载/移除确认，再次按 `Delete` 或 `Enter` 确认 |
-| `←` / `→` | 在管理界面切换启用、配置、测试、检查更新和卸载操作 |
-| `Esc` | 取消确认或返回 |
-
-主输入框使用 `Enter` 发送，`Shift+Enter`、`Ctrl+Enter` 或 `Ctrl+J` 插入换行。
-长代码和多行说明会作为普通对话安全提交；Shell 工具与 TUI 输入相互隔离，输入框会过滤意外泄漏的终端鼠标报告。
-
-精选目录只随安装包保存名称、说明和经过验证的上游来源，不会把第三方 Skill/MCP 内容复制进 Coomi。安装前请检查页面显示的来源、许可证和运行要求。第三方扩展可能执行代码或访问外部服务，应仅安装信任的来源并使用最小权限。
-
-部分 MCP 需要额外运行环境或凭据，例如 Node.js、`npx`、Python、`uvx`、Docker、API Token、允许访问的目录或数据库连接地址。Coomi 会在安装前要求填写必需配置；秘密值不会在列表中明文显示，但会保存在本机 `~/.coomi/config/mcp_servers.json`，请保护该文件。
-
-权限模式严格遵循以下语义：`Ask for approval` 在工具执行前询问；`Approve for me` 自动批准普通操作，仅对风险操作询问；
-`Full access` 将所有原生、文本回退、MCP、Agent、网络、写入和命令操作视为已批准，不显示权限确认。
-
-## 快速开始
-
-### 环境要求
-
-- Python >= 3.9
-
-### 安装
-
-#### 从 PyPI 安装（推荐）
+**macOS / Linux：**
 
 ```bash
-pip install coomi-agent
+curl -fsSL https://raw.githubusercontent.com/Septemc/Coomi/main/install.sh | bash
 ```
 
-#### 从源码安装
+**Windows (PowerShell)：**
+
+```powershell
+irm https://raw.githubusercontent.com/Septemc/Coomi/main/install.ps1 | iex
+```
+
+安装脚本会自动下载适合你平台的最新版本到 `~/.local/bin`（Windows 为 `%USERPROFILE%\.local\bin`），确保该目录在 PATH 中即可。
+
+### 从 GitHub Releases 下载
+
+前往 [Releases 页面](https://github.com/Septemc/Coomi/releases) 下载对应平台的二进制文件：
+
+| 平台 | 文件 |
+|------|------|
+| macOS (Apple Silicon) | `coomi-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `coomi-x86_64-apple-darwin.tar.gz` |
+| Linux (x86_64) | `coomi-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (ARM64) | `coomi-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows (x86_64) | `coomi-x86_64-pc-windows-msvc.zip` |
+
+下载解压后将 `coomi`（或 `coomi.exe`）放入 PATH 目录即可。
+
+### 从源码构建
+
+需要 Rust 工具链（`rustup`）。
 
 ```bash
 git clone https://github.com/Septemc/Coomi.git
-cd Coomi
-pip install -e .
+cd Coomi/coomi-rs
+cargo build --release
 ```
 
-### Python 环境说明
+编译产物在 `coomi-rs/target/release/coomi`（Windows 为 `coomi.exe`）。
 
-> **注意**：如果你的系统有多个 Python 环境，`pip install -e .` 会安装到当前 shell 激活的 Python 环境中。
-
-**推荐安装位置**：默认 Python 环境对应的库目录，也就是当前 Python 解释器的 `site-packages`。
-
-| 环境类型    | 常见安装位置                          |
-| ----------- | ------------------------------------- |
-| 系统 Python | `Python 安装目录\Lib\site-packages` |
-| Conda 环境  | `环境目录\Lib\site-packages`        |
-| 虚拟环境    | `项目目录\.venv\Lib\site-packages`  |
-
-**验证当前环境**：
+### 使用 cargo install
 
 ```bash
-# 查看 Python 路径
-which python
-# 或 Windows:
-where python
-
-# 查看 pip 目标路径
-python -m pip show coomi-agent | grep Location
+cargo install --path coomi-rs/ui
 ```
 
-**推荐安装方式**：
-
-先激活你希望使用的默认 Python 环境，再执行：
-
-```bash
-python -m pip install -e .
-```
-
-### 更新
-
-#### 从 PyPI 更新（推荐）
-
-```bash
-pip install --upgrade coomi-agent
-```
-
-#### 从源码更新
-
-```bash
-cd Coomi
-git pull origin main
-pip install -e .
-```
-
-**注意**：从源码安装（`pip install -e .`）时，代码会指向你的本地目录，每次 `git pull` 后无需重新安装。只有当 `pyproject.toml` 中的依赖发生变化时才需要重新执行 `pip install -e .`。
-
-### 首次运行
+## 快速开始
 
 ```bash
 coomi
@@ -138,7 +85,7 @@ coomi
   "active": "default",
   "providers": {
     "default": {
-      "type": "deepseek",
+      "type": "openai_compatible",
       "display": "DeepSeek V4",
       "api_key": "sk-xxx",
       "base_url": "https://api.deepseek.com",
@@ -149,64 +96,101 @@ coomi
 }
 ```
 
-支持的兼容模式：`OpenAI Compatible`（最常用）、`OpenAI Responses`（GPT 专用）和 `Anthropic Messages`。旧配置中的 `generic`、`openai`、`anthropic`、`deepseek` 会继续自动兼容。
+支持的兼容模式：`openai_compatible`（最常用）、`openai_responses`（GPT 专用）、`anthropic_messages` 和 `gemini_native`。
 
-### 运行方式
+## 终端操作
 
-```bash
-# CLI 命令（推荐）
-coomi
+### 快捷键
 
-# 模块运行
-python -m coomi
-```
+| 按键 | 功能 |
+|------|------|
+| `Ctrl+K` | 打开命令面板 |
+| `Ctrl+R` | 打开会话历史 |
+| `Ctrl+Y` | 复制最近一条助手回复 |
+| `Ctrl+L` | 清空时间线 |
+| `Alt+M` | 切换模型 |
+| `Alt+S` | 打开设置 |
+| `Alt+H` | 打开快捷键帮助 |
+| `Alt+L` | Loop 控制 |
+| `Alt+I` | 启动只读 Side Session |
+| `Shift+Tab` | 切换访问策略 |
+| `Up/Down` | 编辑器空时：输入历史；有内容时：编辑器内导航 |
+| `PageUp/PageDown` | 滚动对话 |
+| `Home/End` | 编辑器空时：跳至顶部/底部 |
+| `鼠标滚轮` | 滚动对话 |
+| `Esc` | 关闭 / 取消 / 双击退出 |
+| `Ctrl+C` | 取消当前任务 / 清空输入 / 退出 |
 
-## 内置命令
+### Slash 命令
 
-| 命令                        | 说明                                            |
-| --------------------------- | ----------------------------------------------- |
-| `/model`                  | 列出所有可用模型                                |
-| `/model <id>`             | 切换到指定 Provider                             |
-| `/context`                | 显示当前上下文窗口大小                          |
-| `/context 256k`           | 设置上下文窗口（如 `128k`、`512k`、`1m`） |
-| `/memory list`            | 列出所有记忆                                    |
-| `/memory add <内容>`      | 添加新记忆                                      |
-| `/memory search <关键词>` | 搜索记忆                                        |
-| `/memory delete <名称>`   | 删除记忆                                        |
-| `/clear`                  | 清除当前会话                                    |
-| `exit` / `quit`         | 退出                                            |
+在输入框输入 `/` 打开命令选择器：
+
+| 命令 | 说明 |
+|------|------|
+| `/status` | 显示会话状态 |
+| `/compact` | 手动压缩上下文 |
+| `/model [id]` | 切换模型 |
+| `/history` | 会话历史 |
+| `/plan` | 进入 Plan 模式（只读规划） |
+| `/exit_plan` | 退出 Plan 模式 |
+| `/loop [目标]` | 创建/控制 Loop |
+| `/memory` | 记忆管理 |
+| `/mcp` | MCP 管理 |
+| `/skills` | Skill 管理 |
+| `/settings` | 配置设置 |
+| `/catalog` | 扩展目录 |
+| `/new` | 新会话 |
+| `/clear` | 清空时间线 |
+| `/quit` | 退出 |
+
+### Plan 模式
+
+输入 `/plan` 进入 Plan 模式 — 策略自动切换为只读，用于规划阶段。在 Plan 模式下提交消息会弹出确认对话框，你可以选择：
+
+1. 退出 Plan 模式并发送（恢复之前的策略）
+2. 以只读 Side Session 方式发送
+3. 取消
+
+Agent 也可以在工作过程中自动进入/退出 Plan 模式。
+
+### 访问策略
+
+| 策略 | 说明 |
+|------|------|
+| `read-only` | 禁止写入，只读操作 |
+| `workspace-write` | 允许工作区内文件编辑（默认） |
+| `full-access` | 完全访问，仍会询问危险命令 |
+
+## Skill 与 MCP 管理中心
+
+在主输入框输入 `/`，可以直接选择已启用的 Skill 和 MCP。选择 Skill 后补充任务，例如
+`/skill frontend-design 设计登录页`；它会在当前会话持续激活。
+选择 MCP 会进入操作提示，例如 `/mcp memory 保存信息 我的项目名称是 Coomi`。
+
+精选目录只随安装包保存名称、说明和经过验证的上游来源，不会把第三方 Skill/MCP 内容复制进 Coomi。
 
 ## 架构
 
 ```
-coomi-py/                       # Python 版本
-└── coomi/                      # 可导入主包（import coomi）
-    ├── __init__.py             # 版本信息
-    ├── __main__.py             # python -m coomi 入口
-    ├── cli.py                  # CLI 入口（coomi 命令）
-    ├── first_run.py            # 首次配置引导
-    ├── types.py                # Message, Session, ToolCall, LLMResponse
-    ├── engine/                 # Agent 循环、会话与工具执行
-    ├── services/               # Provider、上下文、Memory、MCP 与 Skill
-    ├── tools/                  # Python 内置工具
-    └── ui/                     # Textual TUI 界面
+coomi-rs/                       # Rust 版本（主版本）
+├── engine/                     # Agent 循环、会话管理、工具生命周期
+├── services/                   # Provider 注册与适配器
+├── tools/                      # 文件、搜索、Shell 工具
+├── security/                   # 访问控制与工作区边界
+├── ui/                         # Ratatui 终端界面
+└── catalogs/                   # 可安装的 MCP/Skill 目录
 
-coomi-rs/                       # Rust 版本
-├── engine/
-├── services/
-├── tools/
-├── security/
-├── ui/
-└── catalogs/
+coomi-py/                       # Python 版本（兼容保留）
+└── coomi/                      # 可导入主包
 ```
 
 ## 上下文压缩
 
 三层压缩，当前估算 Token 数超过上下文窗口 90% 时触发：
 
-1. **Microcompact（微清理）** — 将超出保留数量（6 条）的旧工具结果内容替换为 `[cleared]` 标记。零 API 开销。
-2. **消息裁剪** — 保留第一条消息 + 最近 8 条消息。零 API 开销。
-3. **LLM 摘要** — 生成 9 段结构化摘要（核心需求、关键概念、文件与代码、错误与修复、问题解决、用户消息、待办任务、当前工作、建议下一步）。使用当前模型。
+1. **Microcompact（微清理）** — 将超出保留数量的旧工具结果替换为 `[cleared]` 标记。零 API 开销。
+2. **消息裁剪** — 保留第一条消息 + 最近若干条消息。零 API 开销。
+3. **LLM 摘要** — 生成结构化摘要。使用当前模型。
 
 ## 记忆系统
 
@@ -216,19 +200,15 @@ coomi-rs/                       # Rust 版本
 2. `~/.coomi/projects/{hash}/memory/` — 项目全局
 3. `~/.coomi/memory/` — 全局（所有项目共享）
 
-记忆类型：`user`（用户偏好）、`feedback`（反馈纠正）、`project`（项目上下文）、`reference`（外部引用）。
-
-MemoryExtractor 自动分析对话并保存相关记忆。MemoryRecall 执行语义选择，将相关记忆注入 System Prompt。
-
 ## 项目参考来源
 
-本项目在工程复现和实现思路上参考了以下项目（或源码实现，或界面交互体验）：
+本项目在工程复现和实现思路上参考了以下项目：
 
 - Claude Code
 - Codex
 - OpenCode
 
-参考重点主要是 Agent 主循环、工具调用编排、上下文管理和终端交互方式，不代表与原项目具有相同实现或功能范围。
+参考重点主要是 Agent 主循环、工具调用编排、上下文管理和终端交互方式。
 
 ## License
 

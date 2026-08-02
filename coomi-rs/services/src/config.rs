@@ -26,17 +26,33 @@ pub enum RemoteCompactionMode {
 
 impl ProviderKind {
     fn from_config(provider_type: &str, tool_protocol: Option<&str>) -> Result<Self> {
-        let value = tool_protocol
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(provider_type)
-            .trim()
-            .to_ascii_lowercase()
-            .replace(['-', ' '], "_");
+        let provider_type = provider_type.trim();
+        // Older coomi-rs builds incorrectly stored the API wire protocol in
+        // `tool_protocol`. Keep those files readable, but do not let the new
+        // tool-calling preference override the selected API compatibility.
+        let legacy_protocol = tool_protocol.filter(|value| {
+            matches!(
+                value
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace(['-', ' '], "_")
+                    .as_str(),
+                "openai_compatible" | "openai_responses" | "anthropic_messages" | "gemini_native"
+            )
+        });
+        let value = if provider_type.is_empty() || provider_type.eq_ignore_ascii_case("generic") {
+            legacy_protocol.unwrap_or(provider_type)
+        } else {
+            provider_type
+        }
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_");
         match value.as_str() {
-            "generic" | "deepseek" | "openai" | "openai_compatible" | "chat_completions" => {
+            "generic" | "deepseek" | "openai_compatible" | "chat_completions" => {
                 Ok(Self::OpenAiCompatible)
             }
-            "openai_responses" | "responses" => Ok(Self::OpenAiResponses),
+            "openai" | "openai_responses" | "responses" => Ok(Self::OpenAiResponses),
             "anthropic" | "anthropic_messages" => Ok(Self::AnthropicMessages),
             "gemini" | "gemini_native" => Ok(Self::GeminiNative),
             other => anyhow::bail!("unsupported provider protocol: {other}"),
@@ -182,7 +198,7 @@ impl ProviderRegistry {
                     model: provider.model,
                     fast_model: provider.fast_model.filter(|value| !value.trim().is_empty()),
                     capabilities: coomi_engine::ModelCapabilities {
-                        context_window: provider.context_window.unwrap_or(128_000),
+                        context_window: provider.context_window.unwrap_or(256_000),
                         effective_context_window_percent: provider
                             .effective_context_window_percent
                             .unwrap_or(95)
@@ -195,7 +211,11 @@ impl ProviderRegistry {
                             .supports_remote_compaction
                             .unwrap_or(kind == ProviderKind::OpenAiResponses),
                         supports_vision: provider.supports_vision,
-                        supports_native_tools: provider.supports_native_tools,
+                        supports_native_tools: provider.supports_native_tools
+                            && provider
+                                .tool_protocol
+                                .as_deref()
+                                .is_none_or(|protocol| !protocol.eq_ignore_ascii_case("disabled")),
                         supports_web_search: provider.supports_web_search,
                         supports_parallel_tool_calls: provider.supports_parallel_tool_calls,
                     },
@@ -348,7 +368,7 @@ impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
             provider_type: default_provider_type(),
-            tool_protocol: Some("openai_compatible".into()),
+            tool_protocol: Some("auto".into()),
             display: String::new(),
             api_key: String::new(),
             base_url: String::new(),
@@ -412,7 +432,32 @@ mod tests {
                 .expect("primary")
                 .capabilities
                 .effective_context_window(),
-            121_600
+            243_200
         );
+    }
+
+    #[test]
+    fn tool_protocol_does_not_override_api_kind_and_disabled_tools_are_honored() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("providers.json");
+        fs::write(
+            &path,
+            r#"{
+                "active": "primary",
+                "providers": {
+                    "primary": {
+                        "type": "anthropic_messages",
+                        "tool_protocol": "disabled",
+                        "base_url": "https://example.test",
+                        "model": "claude"
+                    }
+                }
+            }"#,
+        )
+        .expect("write provider fixture");
+        let registry = ProviderRegistry::load(&path).expect("provider registry");
+        let provider = registry.resolve(None).expect("active provider");
+        assert_eq!(provider.kind, ProviderKind::AnthropicMessages);
+        assert!(!provider.capabilities.supports_native_tools);
     }
 }

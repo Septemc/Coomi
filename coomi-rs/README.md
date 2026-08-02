@@ -32,7 +32,7 @@ by `coomi models`; arbitrary model overrides are rejected.
       "base_url": "https://example.com/v1",
       "model": "main-model",
       "fast_model": "fast-model",
-      "context_window": 128000,
+      "context_window": 256000,
       "effective_context_window_percent": 95,
       "auto_compact_scope": "total",
       "supports_web_search": false,
@@ -88,7 +88,7 @@ interface. It keeps the conversation timeline, tool progress, queued follow-ups,
 and multiline composer visible together. Use `Ctrl+K` for the command palette,
 `Ctrl+R` for workspace session history, `Alt+M` for configured models, `Alt+S`
 for Settings, and `Alt+H` for the complete key reference. `Alt+L` opens or edits
-the active Loop, `Alt+Enter` starts a read-only Side Session, `Shift+Tab` cycles
+the active Loop, `Alt+I` starts a read-only Side Session, `Shift+Tab` cycles
 the access policy, and `Esc` cancels an active turn. No F1-F12 binding is used.
 
 Typing `/` opens the command picker. The main control commands are `/status`,

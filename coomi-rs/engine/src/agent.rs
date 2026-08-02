@@ -52,7 +52,10 @@ impl Agent {
     pub fn new(system_prompt: impl Into<String>) -> Self {
         Self {
             system_prompt: system_prompt.into(),
-            max_tool_rounds: 24,
+            // Match the mature Python runtime: substantial coding turns commonly
+            // need more than 24 model/tool exchanges, while 100 remains a guard
+            // against an unbounded provider loop.
+            max_tool_rounds: 100,
             force_compaction: false,
             input_queue: None,
         }
@@ -133,7 +136,11 @@ impl Agent {
                 "the current session has no context to compact"
             )));
         }
-        let tool_specs = tools.specs();
+        let tool_specs = if provider.capabilities().supports_native_tools {
+            tools.specs()
+        } else {
+            Vec::new()
+        };
         session.messages = normalize_history(&session.messages);
         session
             .context
@@ -227,8 +234,12 @@ impl Agent {
             session.messages.push(ChatMessage::internal_user(context));
         }
         session.messages.push(prompt);
-        let tool_specs = tools.specs();
         let capabilities = provider.capabilities();
+        let tool_specs = if capabilities.supports_native_tools {
+            tools.specs()
+        } else {
+            Vec::new()
+        };
         let mut compacted_for_provider_error = false;
 
         for round in 1..=self.max_tool_rounds {
@@ -336,9 +347,16 @@ impl Agent {
         }
 
         session.touch();
-        Err(AgentError::ToolRoundLimit {
-            limit: self.max_tool_rounds,
-        })
+        let message = format!(
+            "Tool loop stopped after {} rounds to prevent an infinite cycle. The session is preserved; continue with a different approach.",
+            self.max_tool_rounds
+        );
+        session
+            .messages
+            .push(ChatMessage::assistant(message.clone(), Vec::new()));
+        observer.on_event(&AgentEvent::Text(message.clone()));
+        observer.on_event(&AgentEvent::TurnCompleted(session.usage.clone()));
+        Ok(message)
     }
 
     async fn compact(

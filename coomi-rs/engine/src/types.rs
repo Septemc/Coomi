@@ -73,7 +73,7 @@ impl ModelCapabilities {
 }
 
 const fn default_context_window() -> u64 {
-    128_000
+    256_000
 }
 
 const fn default_effective_context_window_percent() -> u8 {

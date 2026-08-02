@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: coomi-x86_64-unknown-linux-gnu
+            bin: coomi
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: coomi-aarch64-unknown-linux-gnu
+            bin: coomi
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: coomi-x86_64-apple-darwin
+            bin: coomi
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: coomi-aarch64-apple-darwin
+            bin: coomi
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: coomi-x86_64-pc-windows-msvc
+            bin: coomi.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compile tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compile tools (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: coomi-rs
+
+      - name: Build release binary
+        working-directory: coomi-rs
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+        run: cargo build --release
+
+      - name: Prepare artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p dist
+          cp coomi-rs/target/${{ matrix.target }}/release/${{ matrix.bin }} dist/${{ matrix.bin }}
+          chmod +x dist/${{ matrix.bin }}
+          cd dist && tar czf ../${{ matrix.artifact }}.tar.gz *
+
+      - name: Prepare artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item coomi-rs/target/${{ matrix.target }}/release/${{ matrix.bin }} dist/${{ matrix.bin }}
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

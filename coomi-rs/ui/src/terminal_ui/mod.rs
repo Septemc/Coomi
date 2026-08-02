@@ -70,15 +70,19 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use crossterm::execute;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
+use ratatui::layout::Rect;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::io;
@@ -100,8 +104,8 @@ pub async fn run(cli: &Cli, paths: &RuntimePaths, session: Session) -> Result<()
     execute!(
         io::stdout(),
         EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
+        EnableBracketedPaste,
+        EnableMouseCapture
     )
     .context("failed to enter terminal UI")?;
 
@@ -136,11 +140,7 @@ pub async fn run(cli: &Cli, paths: &RuntimePaths, session: Session) -> Result<()
                 Event::Paste(text) if app.accepts_text_input() => {
                     app.active_editor_mut().insert_str(&text);
                 }
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollUp => app.scroll_up(3),
-                    MouseEventKind::ScrollDown => app.scroll_down(3),
-                    _ => {}
-                },
+                Event::Mouse(mouse) => handle_mouse(&mut app, mouse),
                 _ => {}
             }
         }
@@ -248,7 +248,59 @@ impl Overlay {
 struct PendingApproval {
     call: ToolCall,
     reason: String,
+    selected: ApprovalChoice,
     responder: Option<oneshot::Sender<bool>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApprovalChoice {
+    Approve,
+    Deny,
+}
+
+impl ApprovalChoice {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Approve => Self::Deny,
+            Self::Deny => Self::Approve,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlanModeChoice {
+    ExitAndSend,
+    SendReadOnly,
+    Cancel,
+}
+
+impl PlanModeChoice {
+    fn next(self) -> Self {
+        match self {
+            Self::ExitAndSend => Self::SendReadOnly,
+            Self::SendReadOnly => Self::Cancel,
+            Self::Cancel => Self::ExitAndSend,
+        }
+    }
+    fn prev(self) -> Self {
+        match self {
+            Self::ExitAndSend => Self::Cancel,
+            Self::SendReadOnly => Self::ExitAndSend,
+            Self::Cancel => Self::SendReadOnly,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::ExitAndSend => "Yes, exit plan mode and send",
+            Self::SendReadOnly => "No, send as read-only side session",
+            Self::Cancel => "Cancel",
+        }
+    }
+}
+
+struct PlanModeConfirm {
+    prompt: String,
+    selected: PlanModeChoice,
 }
 
 struct PendingUserInput {
@@ -275,107 +327,257 @@ struct McpForm {
 }
 
 #[derive(Clone, Copy)]
+struct ProviderOption {
+    value: &'static str,
+    label: &'static str,
+}
+
+#[derive(Clone, Copy)]
 struct ProviderField {
     key: &'static str,
     label: &'static str,
     secret: bool,
+    options: &'static [ProviderOption],
 }
+
+impl ProviderField {
+    fn is_choice(self) -> bool {
+        !self.options.is_empty()
+    }
+
+    fn option_label(self, value: &str) -> &str {
+        self.options
+            .iter()
+            .find(|option| option.value == value)
+            .map_or(value, |option| option.label)
+    }
+
+    fn is_custom_input(self, value: &str) -> bool {
+        self.key == "context_window"
+            && value != CUSTOM_CONTEXT_WINDOW
+            && !self.options.iter().any(|option| option.value == value)
+    }
+}
+
+const TEXT_FIELD: &[ProviderOption] = &[];
+const PROVIDER_TYPE_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "openai_compatible",
+        label: "OpenAI Compatible",
+    },
+    ProviderOption {
+        value: "openai_responses",
+        label: "OpenAI Responses",
+    },
+    ProviderOption {
+        value: "anthropic_messages",
+        label: "Anthropic Messages",
+    },
+    ProviderOption {
+        value: "gemini_native",
+        label: "Google Gemini (Native)",
+    },
+];
+const TOOL_PROTOCOL_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "auto",
+        label: "Auto (recommended)",
+    },
+    ProviderOption {
+        value: "native",
+        label: "Native tool calling",
+    },
+    ProviderOption {
+        value: "structured",
+        label: "Structured text",
+    },
+    ProviderOption {
+        value: "mimo",
+        label: "MiMo text tools",
+    },
+    ProviderOption {
+        value: "disabled",
+        label: "Disabled",
+    },
+];
+const CUSTOM_CONTEXT_WINDOW: &str = "__custom__";
+const CONTEXT_WINDOW_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "128000",
+        label: "128K",
+    },
+    ProviderOption {
+        value: "256000",
+        label: "256K (default)",
+    },
+    ProviderOption {
+        value: "512000",
+        label: "512K",
+    },
+    ProviderOption {
+        value: CUSTOM_CONTEXT_WINDOW,
+        label: "Custom...",
+    },
+];
+const COMPACT_SCOPE_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "total",
+        label: "Total context",
+    },
+    ProviderOption {
+        value: "body_after_prefix",
+        label: "Body after prefix",
+    },
+];
+const OPTIONAL_BOOL_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "",
+        label: "Auto",
+    },
+    ProviderOption {
+        value: "true",
+        label: "Enabled",
+    },
+    ProviderOption {
+        value: "false",
+        label: "Disabled",
+    },
+];
+const BOOL_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "true",
+        label: "Enabled",
+    },
+    ProviderOption {
+        value: "false",
+        label: "Disabled",
+    },
+];
+const REMOTE_MODE_OPTIONS: &[ProviderOption] = &[
+    ProviderOption {
+        value: "v2",
+        label: "V2",
+    },
+    ProviderOption {
+        value: "legacy",
+        label: "Legacy",
+    },
+];
 
 const PROVIDER_FIELDS: &[ProviderField] = &[
     ProviderField {
         key: "id",
         label: "Provider ID",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "display",
         label: "Display name",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "type",
-        label: "Protocol type",
+        label: "API compatibility",
         secret: false,
+        options: PROVIDER_TYPE_OPTIONS,
     },
     ProviderField {
         key: "tool_protocol",
-        label: "Tool protocol",
+        label: "Tool calling",
         secret: false,
+        options: TOOL_PROTOCOL_OPTIONS,
     },
     ProviderField {
         key: "base_url",
         label: "Base URL",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "model",
         label: "Model",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "fast_model",
         label: "Fast model",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "api_key",
         label: "API Key",
         secret: true,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "context_window",
         label: "Context window",
         secret: false,
+        options: CONTEXT_WINDOW_OPTIONS,
     },
     ProviderField {
         key: "effective_context_window_percent",
         label: "Effective window %",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "auto_compact_token_limit",
         label: "Compact token limit",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "auto_compact_scope",
         label: "Compact scope",
         secret: false,
+        options: COMPACT_SCOPE_OPTIONS,
     },
     ProviderField {
         key: "max_output_tokens",
         label: "Max output tokens",
         secret: false,
+        options: TEXT_FIELD,
     },
     ProviderField {
         key: "supports_remote_compaction",
         label: "Remote compaction",
         secret: false,
+        options: OPTIONAL_BOOL_OPTIONS,
     },
     ProviderField {
         key: "remote_compaction_mode",
         label: "Remote mode",
         secret: false,
+        options: REMOTE_MODE_OPTIONS,
     },
     ProviderField {
         key: "supports_vision",
         label: "Vision",
         secret: false,
+        options: BOOL_OPTIONS,
     },
     ProviderField {
         key: "supports_native_tools",
         label: "Native tools",
         secret: false,
+        options: BOOL_OPTIONS,
     },
     ProviderField {
         key: "supports_web_search",
         label: "Native web search",
         secret: false,
+        options: BOOL_OPTIONS,
     },
     ProviderField {
         key: "supports_parallel_tool_calls",
         label: "Parallel tools",
         secret: false,
+        options: BOOL_OPTIONS,
     },
 ];
 
@@ -383,6 +585,7 @@ struct ProviderForm {
     original_id: Option<String>,
     fields: Vec<(ProviderField, Editor)>,
     selected: usize,
+    choice_open: bool,
     show_secret: bool,
 }
 
@@ -471,6 +674,7 @@ enum CommandAction {
     Skills,
     Memory,
     Plan,
+    ExitPlan,
     Loop,
     Settings,
     ClearTimeline,
@@ -531,9 +735,14 @@ const COMMANDS: &[CommandItem] = &[
         action: CommandAction::Memory,
     },
     CommandItem {
-        label: "Plan status",
-        detail: "Show the current execution plan",
+        label: "Enter plan mode",
+        detail: "Switch to read-only plan mode",
         action: CommandAction::Plan,
+    },
+    CommandItem {
+        label: "Exit plan mode",
+        detail: "Return to the previous policy",
+        action: CommandAction::ExitPlan,
     },
     CommandItem {
         label: "Loop",
@@ -595,11 +804,17 @@ struct TuiState {
     status: String,
     context_status: ContextStatus,
     scroll: u16,
+    timeline_max_scroll: Cell<u16>,
     follow_tail: bool,
+    scrollbar_area: Cell<Option<Rect>>,
+    scrollbar_dragging: bool,
     spinner_tick: usize,
     last_escape: Option<Instant>,
     loop_continuation_pending: bool,
     side_busy: bool,
+    plan_mode: bool,
+    previous_policy: Option<AccessMode>,
+    plan_mode_confirm: Option<PlanModeConfirm>,
     quit: bool,
 }
 
@@ -644,11 +859,17 @@ impl TuiState {
             status: "Ready".into(),
             context_status: ContextStatus::default(),
             scroll: 0,
+            timeline_max_scroll: Cell::new(0),
             follow_tail: true,
+            scrollbar_area: Cell::new(None),
+            scrollbar_dragging: false,
             spinner_tick: 0,
             last_escape: None,
             loop_continuation_pending,
             side_busy: false,
+            plan_mode: false,
+            previous_policy: None,
+            plan_mode_confirm: None,
             quit: false,
         };
         state.rebuild_timeline();
@@ -700,7 +921,6 @@ impl TuiState {
             kind,
             text: text.into(),
         });
-        self.follow_tail = true;
     }
 
     fn accepts_text_input(&self) -> bool {
@@ -793,17 +1013,25 @@ impl TuiState {
     }
 
     fn scroll_up(&mut self, amount: u16) {
-        self.scroll = if self.follow_tail {
-            amount
+        let max_scroll = self.timeline_max_scroll.get();
+        if max_scroll == 0 {
+            self.scroll = 0;
+            self.follow_tail = true;
+            return;
+        }
+        let current = if self.follow_tail {
+            max_scroll
         } else {
-            self.scroll.saturating_add(amount)
+            self.scroll.min(max_scroll)
         };
+        self.scroll = current.saturating_sub(amount);
         self.follow_tail = false;
     }
 
     fn scroll_down(&mut self, amount: u16) {
-        self.scroll = self.scroll.saturating_sub(amount);
-        self.follow_tail = self.scroll == 0;
+        let max_scroll = self.timeline_max_scroll.get();
+        self.scroll = self.scroll.saturating_add(amount).min(max_scroll);
+        self.follow_tail = self.scroll >= max_scroll;
     }
 
     fn cycle_policy(&mut self) {
@@ -817,6 +1045,39 @@ impl TuiState {
             AccessMode::FullAccess => AccessMode::ReadOnly,
         };
         self.status = format!("Policy: {}", self.policy.label());
+    }
+
+    fn enter_plan_mode(&mut self) {
+        if self.plan_mode {
+            self.status = "Already in plan mode".into();
+            return;
+        }
+        self.previous_policy = Some(self.policy);
+        self.policy = AccessMode::ReadOnly;
+        self.plan_mode = true;
+        self.status = "Plan mode entered — read-only. Use /exit_plan to leave.".into();
+        self.push_notice(
+            NoticeKind::Success,
+            "Plan mode entered. Policy is now read-only. Use /exit_plan to return.",
+        );
+    }
+
+    fn exit_plan_mode(&mut self) {
+        if !self.plan_mode {
+            self.status = "Not in plan mode".into();
+            return;
+        }
+        if let Some(previous) = self.previous_policy.take() {
+            self.policy = previous;
+        } else {
+            self.policy = AccessMode::WorkspaceWrite;
+        }
+        self.plan_mode = false;
+        self.status = format!("Plan mode exited — policy: {}", self.policy.label());
+        self.push_notice(
+            NoticeKind::Success,
+            format!("Plan mode exited. Policy restored to {}.", self.policy.label()),
+        );
     }
 }
 
@@ -1367,6 +1628,7 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
             app.pending_approval = Some(PendingApproval {
                 call,
                 reason,
+                selected: ApprovalChoice::Approve,
                 responder: Some(responder),
             });
         }
@@ -1397,7 +1659,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                     Some(TimelineEntry::SideAssistant(current)) => current.push_str(&text),
                     _ => app.timeline.push(TimelineEntry::SideAssistant(text)),
                 }
-                app.follow_tail = true;
             }
             AgentEvent::ReasoningDelta(_) => app.status = "Side Session thinking".into(),
             AgentEvent::ToolStarted(call) => {
@@ -1425,7 +1686,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                 AgentEvent::Text(text) => {
                     if !text.is_empty() {
                         app.timeline.push(TimelineEntry::Assistant(text));
-                        app.follow_tail = true;
                     }
                 }
                 AgentEvent::TextDelta(text) => {
@@ -1434,7 +1694,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                             Some(TimelineEntry::Assistant(current)) => current.push_str(&text),
                             _ => app.timeline.push(TimelineEntry::Assistant(text)),
                         }
-                        app.follow_tail = true;
                     }
                 }
                 AgentEvent::ReasoningDelta(text) => {
@@ -1443,7 +1702,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                             Some(TimelineEntry::Reasoning(current)) => current.push_str(&text),
                             _ => app.timeline.push(TimelineEntry::Reasoning(text)),
                         }
-                        app.follow_tail = true;
                     }
                 }
                 AgentEvent::ContextUpdated(status) => app.context_status = status,
@@ -1484,7 +1742,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                         app.timeline.push(TimelineEntry::User(message));
                     }
                     app.status = "Queued input added to the active turn".into();
-                    app.follow_tail = true;
                 }
                 AgentEvent::ToolStarted(call) => {
                     app.status = format!("Running {}", call.name);
@@ -1494,7 +1751,6 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                         arguments: call.arguments,
                         state: ToolState::Running,
                     });
-                    app.follow_tail = true;
                 }
                 AgentEvent::ToolFinished { call, result } => {
                     if let Some(TimelineEntry::Tool { state, .. }) = app.timeline.iter_mut().rev().find(
@@ -1543,11 +1799,58 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
     }
 }
 
+fn handle_mouse(app: &mut TuiState, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            app.scroll_up(3);
+        }
+        MouseEventKind::ScrollDown => {
+            app.scroll_down(3);
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(area) = app.scrollbar_area.get() {
+                if mouse.column >= area.x
+                    && mouse.column < area.x + area.width
+                    && mouse.row >= area.y
+                    && mouse.row < area.y + area.height
+                {
+                    app.scrollbar_dragging = true;
+                    scroll_to_mouse(app, area, mouse.row);
+                }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.scrollbar_dragging => {
+            if let Some(area) = app.scrollbar_area.get() {
+                scroll_to_mouse(app, area, mouse.row);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.scrollbar_dragging = false;
+        }
+        _ => {}
+    }
+}
+
+fn scroll_to_mouse(app: &mut TuiState, area: Rect, row: u16) {
+    let max_scroll = app.timeline_max_scroll.get();
+    if max_scroll == 0 || area.height <= 1 {
+        return;
+    }
+    let relative_row = row.saturating_sub(area.y);
+    let ratio = relative_row as f64 / (area.height.saturating_sub(1)) as f64;
+    let target = (ratio * max_scroll as f64).round() as u16;
+    app.scroll = target.min(max_scroll);
+    app.follow_tail = app.scroll >= max_scroll;
+}
+
 fn handle_key(
     app: &mut TuiState,
     key: KeyEvent,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) -> Result<()> {
+    if app.plan_mode_confirm.is_some() {
+        return handle_plan_mode_confirm_key(app, key, runtime_tx);
+    }
     if app.pending_approval.is_some() {
         return handle_approval_key(app, key);
     }
@@ -1563,7 +1866,7 @@ fn handle_key(
 
     if key.modifiers.contains(KeyModifiers::ALT) {
         match key.code {
-            KeyCode::Enter if app.busy => {
+            KeyCode::Char('i' | 'I') | KeyCode::Enter => {
                 let prompt = app.editor.take().trim().to_owned();
                 start_side_session(app, prompt, runtime_tx);
             }
@@ -1579,6 +1882,8 @@ fn handle_key(
                     app.editor.set("/loop ");
                 }
             }
+            KeyCode::Up => recall_input(app, -1),
+            KeyCode::Down => recall_input(app, 1),
             _ => {}
         }
         return Ok(());
@@ -1602,6 +1907,31 @@ fn handle_key(
                     app.editor.clear();
                 }
             }
+            KeyCode::Char('y') => {
+                let content = app
+                    .timeline
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry {
+                        TimelineEntry::Assistant(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if content.is_empty() {
+                    app.push_notice(NoticeKind::Warning, "No assistant message to copy");
+                } else if crate::clipboard::copy_best(&content) {
+                    app.status = "Last response copied to clipboard".into();
+                    app.push_notice(
+                        NoticeKind::Success,
+                        "Copied last assistant response to clipboard",
+                    );
+                } else {
+                    app.push_notice(
+                        NoticeKind::Error,
+                        "Failed to copy to clipboard (clipboard not available)",
+                    );
+                }
+            }
             _ => {}
         }
         return Ok(());
@@ -1612,10 +1942,18 @@ fn handle_key(
         KeyCode::Esc => handle_escape(app),
         KeyCode::PageUp => app.scroll_up(8),
         KeyCode::PageDown => app.scroll_down(8),
+        KeyCode::Home if app.editor.is_empty() => {
+            app.scroll = 0;
+            app.follow_tail = false;
+        }
         KeyCode::End if app.editor.is_empty() => {
             app.scroll = 0;
             app.follow_tail = true;
         }
+        KeyCode::Up if app.editor.is_empty() => recall_input(app, -1),
+        KeyCode::Down if app.editor.is_empty() => recall_input(app, 1),
+        KeyCode::Up => app.editor.move_up(),
+        KeyCode::Down => app.editor.move_down(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => app.editor.insert('\n'),
         KeyCode::Enter => submit_editor(app, runtime_tx)?,
         KeyCode::Backspace => app.editor.backspace(),
@@ -1624,8 +1962,6 @@ fn handle_key(
         KeyCode::Right => app.editor.move_right(),
         KeyCode::Home => app.editor.move_home(),
         KeyCode::End => app.editor.move_end(),
-        KeyCode::Up if app.editor.is_empty() => recall_input(app, -1),
-        KeyCode::Down if app.history_cursor.is_some() => recall_input(app, 1),
         KeyCode::Tab => app.editor.insert_str("    "),
         KeyCode::Char('/') if app.editor.is_empty() => {
             app.editor.insert('/');
@@ -1661,6 +1997,13 @@ fn submit_editor(
     if prompt.starts_with('/') {
         return execute_slash_command(app, &prompt, runtime_tx);
     }
+    if app.plan_mode {
+        app.plan_mode_confirm = Some(PlanModeConfirm {
+            prompt,
+            selected: PlanModeChoice::ExitAndSend,
+        });
+        return Ok(());
+    }
     if app.busy {
         app.input_queue.push(prompt.clone());
         app.queue.push_back(prompt);
@@ -1687,6 +2030,7 @@ fn start_auto_config(
         app.pending_approval = Some(PendingApproval {
             call,
             reason,
+            selected: ApprovalChoice::Approve,
             responder: Some(responder),
         });
     }
@@ -1798,7 +2142,14 @@ fn execute_slash_command(
         "/mcp" => open_settings_tab(app, SettingsTab::Mcp, runtime_tx.clone()),
         "/skill" | "/skills" => open_settings_tab(app, SettingsTab::Skills, runtime_tx.clone()),
         "/memory" => handle_memory_command(app, argument)?,
-        "/plan" => show_plan_status(app),
+        "/plan" => {
+            if app.plan_mode {
+                show_plan_status(app);
+            } else {
+                app.enter_plan_mode();
+            }
+        }
+        "/exit_plan" => app.exit_plan_mode(),
         "/loop" if argument.is_empty() => show_loop_status(app),
         "/loop" if argument.eq_ignore_ascii_case("pause") => {
             set_loop_status(app, coomi_engine::LoopStatus::Paused)?
@@ -2077,10 +2428,69 @@ fn cancel_active_turn(app: &mut TuiState) {
     app.push_notice(NoticeKind::Warning, "Active turn cancelled");
 }
 
+fn handle_plan_mode_confirm_key(
+    app: &mut TuiState,
+    key: KeyEvent,
+    runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
+) -> Result<()> {
+    let confirm = app.plan_mode_confirm.as_mut().expect("plan mode confirm");
+    match key.code {
+        KeyCode::Esc => {
+            app.plan_mode_confirm = None;
+            return Ok(());
+        }
+        KeyCode::Up | KeyCode::Left => {
+            confirm.selected = confirm.selected.prev();
+            return Ok(());
+        }
+        KeyCode::Down | KeyCode::Right => {
+            confirm.selected = confirm.selected.next();
+            return Ok(());
+        }
+        KeyCode::Enter => {}
+        _ => return Ok(()),
+    }
+    let choice = confirm.selected;
+    let prompt = confirm.prompt.clone();
+    app.plan_mode_confirm = None;
+    match choice {
+        PlanModeChoice::ExitAndSend => {
+            app.exit_plan_mode();
+            if app.busy {
+                app.input_queue.push(prompt.clone());
+                app.queue.push_back(prompt);
+                app.status = format!("{} queued message(s)", app.queue.len());
+            } else {
+                start_agent_turn(app, prompt, false, runtime_tx);
+            }
+        }
+        PlanModeChoice::SendReadOnly => {
+            start_side_session(app, prompt, runtime_tx);
+        }
+        PlanModeChoice::Cancel => {}
+    }
+    Ok(())
+}
+
 fn handle_approval_key(app: &mut TuiState, key: KeyEvent) -> Result<()> {
     let approved = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(false),
+        KeyCode::Enter => app
+            .pending_approval
+            .as_ref()
+            .map(|pending| pending.selected == ApprovalChoice::Approve),
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Tab
+        | KeyCode::BackTab => {
+            if let Some(pending) = app.pending_approval.as_mut() {
+                pending.selected = pending.selected.toggle();
+            }
+            None
+        }
         _ => None,
     };
     if let Some(approved) = approved
@@ -2400,7 +2810,15 @@ fn apply_command_action(
         }
         CommandAction::Plan => {
             app.close_overlay();
-            show_plan_status(app);
+            if app.plan_mode {
+                show_plan_status(app);
+            } else {
+                app.enter_plan_mode();
+            }
+        }
+        CommandAction::ExitPlan => {
+            app.close_overlay();
+            app.exit_plan_mode();
         }
         CommandAction::Loop => {
             app.editor.set("/loop ");
@@ -2657,12 +3075,48 @@ fn handle_settings_key(
         .as_ref()
         .is_some_and(|settings| settings.form.is_some());
     if editing {
-        let save = {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('s' | 'S'))
+        {
+            return save_provider_form(app);
+        }
+        {
             let form = app
                 .settings
                 .as_mut()
                 .and_then(|settings| settings.form.as_mut())
                 .expect("provider form");
+            if form.choice_open {
+                match key.code {
+                    KeyCode::Esc => form.choice_open = false,
+                    KeyCode::Enter => {
+                        if form.fields[form.selected].1.text() == CUSTOM_CONTEXT_WINDOW {
+                            form.fields[form.selected].1.clear();
+                        }
+                        form.choice_open = false;
+                    }
+                    KeyCode::Up | KeyCode::Left => cycle_provider_choice(form, -1),
+                    KeyCode::Down | KeyCode::Right => cycle_provider_choice(form, 1),
+                    KeyCode::Home => set_provider_choice(form, 0),
+                    KeyCode::End => {
+                        let last = form.fields[form.selected].0.options.len().saturating_sub(1);
+                        set_provider_choice(form, last);
+                    }
+                    KeyCode::Tab => {
+                        form.choice_open = false;
+                        form.selected = (form.selected + 1) % form.fields.len();
+                    }
+                    KeyCode::BackTab => {
+                        form.choice_open = false;
+                        form.selected = form
+                            .selected
+                            .checked_sub(1)
+                            .unwrap_or(form.fields.len() - 1);
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
             match key.code {
                 KeyCode::Esc => {
                     app.settings.as_mut().expect("settings").form = None;
@@ -2677,21 +3131,49 @@ fn handle_settings_key(
                         .checked_sub(1)
                         .unwrap_or(form.fields.len() - 1);
                 }
+                KeyCode::Enter
+                    if form.fields[form.selected]
+                        .0
+                        .is_custom_input(&form.fields[form.selected].1.text()) =>
+                {
+                    if form.selected + 1 < form.fields.len() {
+                        form.selected += 1;
+                    } else {
+                        return save_provider_form(app);
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char(' ') if form.fields[form.selected].0.is_choice() => {
+                    form.choice_open = true;
+                }
                 KeyCode::Enter if form.selected + 1 < form.fields.len() => form.selected += 1,
                 KeyCode::Enter => return save_provider_form(app),
                 KeyCode::Backspace => form.fields[form.selected].1.backspace(),
                 KeyCode::Delete => form.fields[form.selected].1.delete(),
+                KeyCode::Left if form.fields[form.selected].0.is_choice() => {
+                    cycle_provider_choice(form, -1)
+                }
+                KeyCode::Right if form.fields[form.selected].0.is_choice() => {
+                    cycle_provider_choice(form, 1)
+                }
                 KeyCode::Left => form.fields[form.selected].1.move_left(),
                 KeyCode::Right => form.fields[form.selected].1.move_right(),
-                KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('v' | 'V') if key.modifiers.contains(KeyModifiers::ALT) => {
                     form.show_secret = !form.show_secret;
                 }
-                KeyCode::Char(character) => form.fields[form.selected].1.insert(character),
+                KeyCode::Char(character)
+                    if form.fields[form.selected]
+                        .0
+                        .is_custom_input(&form.fields[form.selected].1.text())
+                        && character.is_ascii_digit() =>
+                {
+                    form.fields[form.selected].1.insert(character);
+                }
+                KeyCode::Char(character) if !form.fields[form.selected].0.is_choice() => {
+                    form.fields[form.selected].1.insert(character);
+                }
                 _ => {}
             }
-            false
-        };
-        let _ = save;
+        }
         return Ok(());
     }
 
@@ -3059,8 +3541,14 @@ fn begin_provider_form(app: &mut TuiState, id: Option<String>) {
             let value = match field.key {
                 "id" => id.clone().unwrap_or_default(),
                 "display" => provider.display.clone(),
-                "type" => provider.provider_type.clone(),
-                "tool_protocol" => provider.tool_protocol.clone().unwrap_or_default(),
+                "type" => normalized_provider_type(
+                    &provider.provider_type,
+                    provider.tool_protocol.as_deref(),
+                )
+                .into(),
+                "tool_protocol" => {
+                    normalized_tool_protocol(provider.tool_protocol.as_deref()).into()
+                }
                 "base_url" => provider.base_url.clone(),
                 "model" => provider.model.clone(),
                 "fast_model" => provider.fast_model.clone().unwrap_or_default(),
@@ -3068,7 +3556,7 @@ fn begin_provider_form(app: &mut TuiState, id: Option<String>) {
                 "context_window" => provider
                     .context_window
                     .map(|value| value.to_string())
-                    .unwrap_or_default(),
+                    .unwrap_or_else(|| "256000".into()),
                 "effective_context_window_percent" => provider
                     .effective_context_window_percent
                     .map(|value| value.to_string())
@@ -3109,8 +3597,67 @@ fn begin_provider_form(app: &mut TuiState, id: Option<String>) {
         original_id: id,
         fields,
         selected: 0,
+        choice_open: false,
         show_secret: false,
     });
+}
+
+fn cycle_provider_choice(form: &mut ProviderForm, delta: isize) {
+    let options = form.fields[form.selected].0.options;
+    if options.is_empty() {
+        return;
+    }
+    let current = form.fields[form.selected].1.text();
+    let index = options
+        .iter()
+        .position(|option| option.value == current)
+        .unwrap_or(options.len() - 1);
+    let next = if delta < 0 {
+        index.checked_sub(1).unwrap_or(options.len() - 1)
+    } else {
+        (index + 1) % options.len()
+    };
+    set_provider_choice(form, next);
+    if !form.choice_open && form.fields[form.selected].1.text() == CUSTOM_CONTEXT_WINDOW {
+        form.fields[form.selected].1.clear();
+    }
+}
+
+fn set_provider_choice(form: &mut ProviderForm, index: usize) {
+    let field = form.fields[form.selected].0;
+    if let Some(option) = field.options.get(index) {
+        form.fields[form.selected].1.set(option.value);
+    }
+}
+
+fn normalized_provider_type<'a>(provider_type: &'a str, tool_protocol: Option<&'a str>) -> &'a str {
+    let normalized = provider_type.trim();
+    match normalized {
+        "openai_compatible" | "openai_responses" | "anthropic_messages" | "gemini_native" => {
+            normalized
+        }
+        "openai" | "responses" => "openai_responses",
+        "anthropic" => "anthropic_messages",
+        "gemini" => "gemini_native",
+        "generic" | "deepseek" | "chat_completions" | "" => tool_protocol
+            .filter(|value| {
+                PROVIDER_TYPE_OPTIONS
+                    .iter()
+                    .any(|option| option.value == *value)
+            })
+            .unwrap_or("openai_compatible"),
+        _ => "openai_compatible",
+    }
+}
+
+fn normalized_tool_protocol(tool_protocol: Option<&str>) -> &str {
+    tool_protocol
+        .filter(|value| {
+            TOOL_PROTOCOL_OPTIONS
+                .iter()
+                .any(|option| option.value == *value)
+        })
+        .unwrap_or("auto")
 }
 
 fn save_provider_form(app: &mut TuiState) -> Result<()> {
@@ -3128,6 +3675,20 @@ fn save_provider_form(app: &mut TuiState) -> Result<()> {
     let id = values.get("id").cloned().unwrap_or_default();
     if id.is_empty() || id.contains(['/', '\\', ':']) {
         settings.error = Some("Provider ID is empty or contains an invalid path character".into());
+        return Ok(());
+    }
+    if !PROVIDER_TYPE_OPTIONS
+        .iter()
+        .any(|option| option.value == values["type"])
+    {
+        settings.error = Some("Select a supported API compatibility mode".into());
+        return Ok(());
+    }
+    if !TOOL_PROTOCOL_OPTIONS
+        .iter()
+        .any(|option| option.value == values["tool_protocol"])
+    {
+        settings.error = Some("Select a supported tool-calling mode".into());
         return Ok(());
     }
     let original_id = form.original_id.clone();
@@ -3233,6 +3794,9 @@ fn save_provider_form(app: &mut TuiState) -> Result<()> {
                 return Ok(());
             }
         }
+    }
+    if values["tool_protocol"].eq_ignore_ascii_case("disabled") {
+        provider.supports_native_tools = false;
     }
 
     let mut document = settings.document.clone();
@@ -3452,6 +4016,37 @@ mod tests {
     }
 
     #[test]
+    fn arrow_events_recall_input_and_page_keys_scroll_timeline() {
+        let (_home, mut state) = test_state();
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        state.timeline_max_scroll.set(40);
+        state.follow_tail = true;
+        state.input_history.push("previous prompt".into());
+
+        // Up/Down with empty editor → recall input history
+        handle_key(&mut state, KeyEvent::from(KeyCode::Up), sender.clone())
+            .expect("recall input");
+        assert_eq!(state.editor.text(), "previous prompt");
+        assert!(state.follow_tail); // scroll unchanged
+
+        // PageUp/PageDown always scroll the timeline
+        handle_key(&mut state, KeyEvent::from(KeyCode::PageUp), sender.clone())
+            .expect("scroll timeline");
+        assert_eq!(state.scroll, 32);
+        assert!(!state.follow_tail);
+
+        // Alt+Up/Down also recalls input
+        state.editor.clear();
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+            sender,
+        )
+        .expect("alt recall input");
+        assert_eq!(state.editor.text(), "previous prompt");
+    }
+
+    #[test]
     fn active_turn_protects_session_and_scroll_tracks_distance_from_tail() {
         let (_home, mut state) = test_state();
         let session_id = state.session.id;
@@ -3462,13 +4057,41 @@ mod tests {
         assert!(state.status.contains("active turn"));
 
         state.follow_tail = true;
-        state.scroll = 40;
+        state.timeline_max_scroll.set(40);
         state.scroll_up(8);
-        assert_eq!(state.scroll, 8);
+        assert_eq!(state.scroll, 32);
         assert!(!state.follow_tail);
         state.scroll_down(8);
-        assert_eq!(state.scroll, 0);
+        assert_eq!(state.scroll, 40);
         assert!(state.follow_tail);
+    }
+
+    #[test]
+    fn streaming_deltas_preserve_a_scrolled_viewport() {
+        let (_home, mut state) = test_state();
+        state.active_generation = Some(7);
+        state.busy = true;
+        state
+            .timeline
+            .push(TimelineEntry::Assistant("first".into()));
+        state.timeline_max_scroll.set(40);
+        state.follow_tail = false;
+        state.scroll = 12;
+
+        handle_runtime_event(
+            &mut state,
+            RuntimeEvent::Agent {
+                generation: 7,
+                event: AgentEvent::TextDelta(" second".into()),
+            },
+        );
+
+        assert!(!state.follow_tail);
+        assert_eq!(state.scroll, 12);
+        assert!(matches!(
+            state.timeline.last(),
+            Some(TimelineEntry::Assistant(text)) if text == "first second"
+        ));
     }
 
     #[test]
@@ -3497,6 +4120,94 @@ mod tests {
         assert_eq!(parse_bool("false", "feature"), Ok(false));
         assert!(parse_bool("sometimes", "feature").is_err());
         assert_eq!(parse_optional_u64("128000", "window"), Ok(Some(128_000)));
+    }
+
+    #[test]
+    fn provider_choices_open_and_follow_arrow_selection() {
+        let (_home, mut state) = test_state();
+        state.open_overlay(OverlayKind::Settings);
+        begin_provider_form(&mut state, Some("demo".into()));
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let form = state
+            .settings
+            .as_mut()
+            .and_then(|settings| settings.form.as_mut())
+            .expect("provider form");
+        form.selected = 2;
+        handle_settings_key(&mut state, KeyEvent::from(KeyCode::Enter), sender.clone())
+            .expect("open API compatibility choices");
+        handle_settings_key(&mut state, KeyEvent::from(KeyCode::Down), sender.clone())
+            .expect("select next API compatibility");
+        handle_settings_key(&mut state, KeyEvent::from(KeyCode::Enter), sender)
+            .expect("close API compatibility choices");
+        let value = state
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.form.as_ref())
+            .and_then(|form| form.fields.get(2))
+            .map(|(_, editor)| editor.text());
+        assert_eq!(value.as_deref(), Some("openai_responses"));
+    }
+
+    #[test]
+    fn context_window_defaults_to_256k_and_supports_custom_input() {
+        let (_home, mut state) = test_state();
+        state.open_overlay(OverlayKind::Settings);
+        begin_provider_form(&mut state, Some("demo".into()));
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let form = state
+            .settings
+            .as_mut()
+            .and_then(|settings| settings.form.as_mut())
+            .expect("provider form");
+        form.selected = 8;
+        assert_eq!(form.fields[8].1.text(), "256000");
+
+        handle_settings_key(&mut state, KeyEvent::from(KeyCode::Right), sender.clone())
+            .expect("select 512K");
+        handle_settings_key(&mut state, KeyEvent::from(KeyCode::Right), sender.clone())
+            .expect("select custom input");
+        for character in "300000".chars() {
+            handle_settings_key(
+                &mut state,
+                KeyEvent::from(KeyCode::Char(character)),
+                sender.clone(),
+            )
+            .expect("type custom context window");
+        }
+        let form = state
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.form.as_ref())
+            .expect("provider form");
+        assert_eq!(form.fields[8].1.text(), "300000");
+    }
+
+    #[test]
+    fn approval_can_be_selected_with_arrows_and_confirmed() {
+        let (_home, mut state) = test_state();
+        let (responder, mut receiver) = oneshot::channel();
+        state.pending_approval = Some(PendingApproval {
+            call: ToolCall {
+                id: "call-1".into(),
+                name: "local_shell".into(),
+                arguments: serde_json::json!({"command": "cargo test"}),
+            },
+            reason: "Run the test suite?".into(),
+            selected: ApprovalChoice::Approve,
+            responder: Some(responder),
+        });
+        handle_approval_key(&mut state, KeyEvent::from(KeyCode::Right)).expect("select deny");
+        assert_eq!(
+            state
+                .pending_approval
+                .as_ref()
+                .map(|pending| pending.selected),
+            Some(ApprovalChoice::Deny)
+        );
+        handle_approval_key(&mut state, KeyEvent::from(KeyCode::Enter)).expect("confirm deny");
+        assert!(state.pending_approval.is_none());
+        assert!(!receiver.try_recv().expect("approval response"));
     }
 
     #[test]

@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod clipboard;
 mod terminal_ui;
 
 #[derive(Debug, Parser)]

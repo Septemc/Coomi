@@ -2,6 +2,7 @@ use super::COMMANDS;
 use super::CatalogTab;
 use super::NoticeKind;
 use super::OverlayKind;
+use super::PlanModeChoice;
 use super::SettingsTab;
 use super::TimelineEntry;
 use super::ToolState;
@@ -45,6 +46,7 @@ use ratatui::widgets::ScrollbarOrientation;
 use ratatui::widgets::ScrollbarState;
 use ratatui::widgets::Wrap;
 use serde_json::Value;
+use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -65,7 +67,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &TuiState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(5),
             Constraint::Length(queue_height),
             Constraint::Length(sheet_height),
@@ -107,6 +109,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &TuiState) {
     if app.pending_user_input.is_some() {
         render_user_input(frame, sheet, app);
     }
+    if app.plan_mode_confirm.is_some() {
+        render_plan_mode_confirm(frame, sheet, app);
+    }
 }
 
 fn bottom_sheet_height(
@@ -115,10 +120,12 @@ fn bottom_sheet_height(
     composer_height: u16,
     queue_height: u16,
 ) -> u16 {
-    let requested = if app.pending_user_input.is_some() {
+    let requested = if app.plan_mode_confirm.is_some() {
+        9
+    } else if app.pending_user_input.is_some() {
         14
     } else if app.pending_approval.is_some() {
-        11
+        15
     } else if app.confirm_delete.is_some() {
         8
     } else {
@@ -136,7 +143,7 @@ fn bottom_sheet_height(
         }
     };
     let available = total_height
-        .saturating_sub(3)
+        .saturating_sub(2)
         .saturating_sub(3)
         .saturating_sub(queue_height)
         .saturating_sub(composer_height)
@@ -181,7 +188,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
         columns[1],
     );
 
-    let cwd = compact_path(&app.cwd.display().to_string(), columns[2].width as usize);
+    let cwd = compact_path(&display_path(&app.cwd), columns[2].width as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(cwd, Style::default().fg(theme::MUTED)))
             .alignment(Alignment::Right),
@@ -301,14 +308,26 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
         .wrap(Wrap { trim: false })
         .style(theme::base());
     let max_scroll = line_count.saturating_sub(inner.height as usize);
+    let max_scroll_u16 = u16::try_from(max_scroll).unwrap_or(u16::MAX);
+    app.timeline_max_scroll.set(max_scroll_u16);
     let offset = if app.follow_tail {
         max_scroll
     } else {
-        max_scroll.saturating_sub(app.scroll as usize)
+        usize::from(app.scroll.min(max_scroll_u16))
     };
     frame.render_widget(paragraph.scroll((offset as u16, 0)), inner);
     if line_count > inner.height as usize {
-        let mut scrollbar_state = ScrollbarState::new(line_count).position(offset);
+        // The scrollbar occupies the rightmost column of `area`.
+        let scrollbar_rect = Rect {
+            x: area.x + area.width.saturating_sub(1),
+            y: area.y,
+            width: 1,
+            height: area.height,
+        };
+        app.scrollbar_area.set(Some(scrollbar_rect));
+        let mut scrollbar_state = ScrollbarState::new(line_count)
+            .viewport_content_length(inner.height as usize)
+            .position(offset);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(theme::BORDER))
@@ -316,6 +335,8 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             area,
             &mut scrollbar_state,
         );
+    } else {
+        app.scrollbar_area.set(None);
     }
 }
 
@@ -440,7 +461,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
     let active_color = if app.busy { theme::AMBER } else { theme::MINT };
     let title = if app.busy {
         format!(
-            " {} Working · Enter queues · Alt+Enter Side ",
+            " {} Working · Enter queues · Alt+I Side ",
             spinner(app.spinner_tick)
         )
     } else {
@@ -506,10 +527,10 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             Span::styled(" commands  ", Style::default().fg(theme::MUTED)),
             Span::styled("Ctrl+R", theme::key()),
             Span::styled(" history  ", Style::default().fg(theme::MUTED)),
+            Span::styled("Ctrl+Y", theme::key()),
+            Span::styled(" copy  ", Style::default().fg(theme::MUTED)),
             Span::styled("Alt+M", theme::key()),
             Span::styled(" models  ", Style::default().fg(theme::MUTED)),
-            Span::styled("Alt+S", theme::key()),
-            Span::styled(" settings  ", Style::default().fg(theme::MUTED)),
             Span::styled("Alt+H", theme::key()),
             Span::styled(" help", Style::default().fg(theme::MUTED)),
         ])
@@ -517,6 +538,8 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
         Line::from(vec![
             Span::styled(" Ctrl+K", theme::key()),
             Span::styled(" menu  ", Style::default().fg(theme::MUTED)),
+            Span::styled("Ctrl+Y", theme::key()),
+            Span::styled(" copy  ", Style::default().fg(theme::MUTED)),
             Span::styled("Alt+H", theme::key()),
             Span::styled(" help", Style::default().fg(theme::MUTED)),
         ])
@@ -536,10 +559,19 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             compact_tokens(app.context_status.effective_context_window)
         )
     };
-    let policy_color = match app.policy {
-        coomi_security::AccessMode::ReadOnly => theme::SUCCESS,
-        coomi_security::AccessMode::WorkspaceWrite => theme::BLUE,
-        coomi_security::AccessMode::FullAccess => theme::ORANGE,
+    let policy_color = if app.plan_mode {
+        theme::AMBER
+    } else {
+        match app.policy {
+            coomi_security::AccessMode::ReadOnly => theme::SUCCESS,
+            coomi_security::AccessMode::WorkspaceWrite => theme::BLUE,
+            coomi_security::AccessMode::FullAccess => theme::ORANGE,
+        }
+    };
+    let plan_label = if app.plan_mode {
+        "plan mode"
+    } else {
+        app.policy.label()
     };
     let context_color = match used_percent {
         0..=49 => theme::SUCCESS,
@@ -549,7 +581,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(app.policy.label(), Style::default().fg(policy_color).bold()),
+            Span::styled(plan_label, Style::default().fg(policy_color).bold()),
             Span::styled("  ·  ", Style::default().fg(theme::BORDER)),
             Span::styled(context, Style::default().fg(context_color).bold()),
             Span::raw(" "),
@@ -948,19 +980,26 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let lines = vec![
         help_line("Ctrl+K", "Open command palette"),
         help_line("Ctrl+R", "Open session history"),
+        help_line("Ctrl+Y", "Copy last assistant response"),
+        help_line("Ctrl+L", "Clear the timeline"),
         help_line("Alt+M", "Switch configured model"),
         help_line("Alt+S", "Open Settings"),
         help_line("Alt+H", "Open keyboard help"),
         help_line("Alt+L", "Create or control a Loop"),
+        help_line("Alt+I", "Start a read-only Side Session"),
         help_line("Shift+Tab", "Cycle access policy"),
         help_line("Enter", "Send, or queue while a turn runs"),
         help_line("Shift+Enter", "Insert a new line"),
+        help_line("Up/Down", "Recall input (editor empty) or move cursor"),
+        help_line("Alt+Up/Down", "Recall previous input"),
         help_line("PageUp/PageDown", "Scroll the conversation"),
+        help_line("Home/End", "Jump to top/bottom (editor empty)"),
+        help_line("Mouse wheel", "Scroll the conversation"),
         help_line("Esc", "Close, cancel, or press twice to exit"),
         help_line("Ctrl+C", "Cancel a turn, clear input, or exit"),
         Line::from(""),
         Line::from(Span::styled(
-            "Slash commands: /status /compact /model /history /loop /plan /memory /mcp /skills /settings /new /clear /quit",
+            "Slash commands: /status /compact /model /history /loop /plan /exit_plan /memory /mcp /skills /settings /new /clear /quit",
             Style::default().fg(theme::MUTED),
         )),
     ];
@@ -1148,7 +1187,7 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
                 &provider
                     .context_window
                     .map(compact_tokens)
-                    .unwrap_or_else(|| "128.0K default".into()),
+                    .unwrap_or_else(|| "256.0K default".into()),
             ),
             setting_line(
                 "Effective",
@@ -1181,6 +1220,15 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             ),
             setting_line("Vision", &provider.supports_vision.to_string()),
             setting_line("Native search", &provider.supports_web_search.to_string()),
+            setting_line(
+                "Native tools",
+                &(provider.supports_native_tools
+                    && provider
+                        .tool_protocol
+                        .as_deref()
+                        .is_none_or(|protocol| !protocol.eq_ignore_ascii_case("disabled")))
+                .to_string(),
+            ),
             Line::from(""),
             Line::from(Span::styled(
                 if id == &settings.document.active {
@@ -1233,8 +1281,8 @@ fn render_service_settings(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             setting_line("Update", &app.update_status),
             setting_line("Provider", &provider),
             setting_line("Access", app.policy.label()),
-            setting_line("Coomi home", &app.home.display().to_string()),
-            setting_line("Workspace", &app.cwd.display().to_string()),
+            setting_line("Coomi home", &display_path(&app.home)),
+            setting_line("Workspace", &display_path(&app.cwd)),
             Line::from(""),
             Line::from(vec![
                 Span::styled("R", theme::key()),
@@ -1427,7 +1475,7 @@ fn render_service_settings(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
                 let path = item
                     .installed
                     .as_ref()
-                    .map(|installed| installed.path.display().to_string())
+                    .map(|installed| display_path(&installed.path))
                     .unwrap_or_else(|| "-".into());
                 let description = item
                     .entry
@@ -1544,6 +1592,7 @@ fn render_provider_form(
     let page_capacity = rows_per_column.saturating_mul(column_count).max(1);
     let page_start = form.selected / page_capacity * page_capacity;
     let page_end = (page_start + page_capacity).min(form.fields.len());
+    let mut active_cursor = None;
     for (index, (field, editor)) in form
         .fields
         .iter()
@@ -1560,15 +1609,18 @@ fn render_provider_form(
             field_columns[column].width.saturating_sub(2),
             field_height,
         );
-        let value = if field.secret && !form.show_secret && !editor.is_empty() {
-            "•".repeat(editor.text().chars().count().min(48))
-        } else {
-            editor.text()
-        };
         let color = if index == form.selected {
             theme::BLUE
         } else {
             theme::BORDER
+        };
+        let (value, cursor_column) = if field.is_choice() && !field.is_custom_input(&editor.text())
+        {
+            (format!("◀ {} ▶", field.option_label(&editor.text())), None)
+        } else {
+            let mask = (field.secret && !form.show_secret && !editor.is_empty()).then_some('*');
+            let (visible, cursor) = editor.single_line_viewport(field_area.width.max(1), mask);
+            (visible, Some(cursor))
         };
         frame.render_widget(
             Paragraph::new(if value.is_empty() {
@@ -1587,14 +1639,29 @@ fn render_provider_form(
             ),
             field_area,
         );
+        if index == form.selected
+            && let Some(cursor_column) = cursor_column
+            && field_area.width > 0
+        {
+            active_cursor = Some((
+                field_area
+                    .x
+                    .saturating_add(cursor_column.min(field_area.width.saturating_sub(1))),
+                field_area.y.saturating_add(1),
+            ));
+        }
     }
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("Tab / ↑↓", theme::key()),
             Span::raw(" field   "),
+            Span::styled("← / →", theme::key()),
+            Span::raw(" option   "),
             Span::styled("Enter", theme::key()),
-            Span::raw(" next/save   "),
-            Span::styled("Ctrl+V", theme::key()),
+            Span::raw(" next/select   "),
+            Span::styled("Ctrl+S", theme::key()),
+            Span::raw(" save   "),
+            Span::styled("Alt+V", theme::key()),
             Span::raw(" show key   "),
             Span::styled("Esc", theme::key()),
             Span::raw(" cancel   "),
@@ -1608,6 +1675,49 @@ fn render_provider_form(
             ),
         ])),
         rows[2],
+    );
+    if form.choice_open {
+        render_provider_choice_menu(frame, area, form);
+    } else if let Some(position) = active_cursor {
+        frame.set_cursor_position(position);
+    }
+}
+
+fn render_provider_choice_menu(frame: &mut Frame<'_>, area: Rect, form: &super::ProviderForm) {
+    let (field, editor) = &form.fields[form.selected];
+    if field.options.is_empty() {
+        return;
+    }
+    let height = u16::try_from(field.options.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let popup = popup_rect(area, 48, height);
+    frame.render_widget(Clear, popup);
+    let items = field
+        .options
+        .iter()
+        .map(|option| ListItem::new(option.label))
+        .collect::<Vec<_>>();
+    let selected = field
+        .options
+        .iter()
+        .position(|option| option.value == editor.text())
+        .unwrap_or(field.options.len() - 1);
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme::BLUE))
+                    .title(Span::styled(format!(" {} ", field.label), theme::title()))
+                    .style(Style::default().bg(theme::SURFACE)),
+            )
+            .highlight_style(theme::selected())
+            .highlight_symbol("> "),
+        popup,
+        &mut state,
     );
 }
 
@@ -1641,7 +1751,7 @@ fn render_approval(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
     let Some(approval) = &app.pending_approval else {
         return;
     };
-    let popup = popup_rect(area, 76, 13);
+    let popup = popup_rect(area, 76, 15);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1668,9 +1778,30 @@ fn render_approval(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("Y", theme::key()),
-                Span::styled(" approve once    ", Style::default().fg(theme::MUTED)),
-                Span::styled("N / Esc", theme::key()),
+                Span::styled(
+                    " Approve once ",
+                    if approval.selected == super::ApprovalChoice::Approve {
+                        theme::selected()
+                    } else {
+                        Style::default().fg(theme::MUTED)
+                    },
+                ),
+                Span::raw("   "),
+                Span::styled(
+                    " Deny ",
+                    if approval.selected == super::ApprovalChoice::Deny {
+                        theme::selected()
+                    } else {
+                        Style::default().fg(theme::MUTED)
+                    },
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Left / Right", theme::key()),
+                Span::styled(" choose   ", Style::default().fg(theme::MUTED)),
+                Span::styled("Enter", theme::key()),
+                Span::styled(" confirm   ", Style::default().fg(theme::MUTED)),
+                Span::styled("Esc", theme::key()),
                 Span::styled(" deny", Style::default().fg(theme::MUTED)),
             ]),
         ])
@@ -1828,6 +1959,56 @@ fn render_delete_confirmation(
         ]),
         inner,
     );
+}
+
+fn render_plan_mode_confirm(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
+    let confirm = app.plan_mode_confirm.as_ref().expect("plan mode confirm");
+    let popup = popup_rect(area, 62, 9);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::AMBER))
+        .title(Span::styled(
+            " Plan mode ",
+            Style::default().fg(theme::AMBER).bold(),
+        ))
+        .style(Style::default().bg(theme::SURFACE).fg(theme::TEXT))
+        .padding(Padding::new(2, 2, 1, 1));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let choices = [
+        PlanModeChoice::ExitAndSend,
+        PlanModeChoice::SendReadOnly,
+        PlanModeChoice::Cancel,
+    ];
+    let mut lines = vec![
+        Line::from("You are in plan mode. Exit plan mode to make changes?"),
+        Line::from(""),
+    ];
+    for choice in &choices {
+        let selected = *choice == confirm.selected;
+        let prefix = if selected { "▸ " } else { "  " };
+        let style = if selected {
+            Style::default().fg(theme::TEXT).bold()
+        } else {
+            Style::default().fg(theme::MUTED)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{prefix}{}", choice.label()),
+            style,
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("↑/↓", theme::key()),
+        Span::raw(" navigate    "),
+        Span::styled("Enter", theme::key()),
+        Span::raw(" confirm    "),
+        Span::styled("Esc", theme::key()),
+        Span::raw(" cancel"),
+    ]));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn modal_block(title: &str) -> Block<'static> {
@@ -2332,6 +2513,7 @@ fn command_slash(action: super::CommandAction) -> &'static str {
         super::CommandAction::Skills => "/skills",
         super::CommandAction::Memory => "/memory",
         super::CommandAction::Plan => "/plan",
+        super::CommandAction::ExitPlan => "/exit_plan",
         super::CommandAction::Loop => "/loop",
         super::CommandAction::Settings => "/settings",
         super::CommandAction::ClearTimeline => "/clear",
@@ -2451,6 +2633,15 @@ fn truncate_cells(value: &str, max_width: usize) -> String {
     }
     output.push('…');
     output
+}
+
+fn display_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{rest}")
+    } else {
+        value.strip_prefix("\\\\?\\").unwrap_or(&value).to_owned()
+    }
 }
 
 fn compact_path(path: &str, max_width: usize) -> String {
@@ -2573,6 +2764,7 @@ mod tests {
                 arguments: serde_json::json!({"command": "cargo test"}),
             },
             reason: "Run the test suite?".into(),
+            selected: super::super::ApprovalChoice::Approve,
             responder: Some(approval_tx),
         });
         let rows = rendered_rows(&state, 100, 32);
@@ -2714,6 +2906,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_form_cursor_is_on_the_selected_value_row() {
+        let (_home, mut state) = test_state();
+        state.open_overlay(OverlayKind::Settings);
+        super::super::begin_provider_form(&mut state, Some("demo".into()));
+        state
+            .settings
+            .as_mut()
+            .and_then(|settings| settings.form.as_mut())
+            .expect("provider form")
+            .selected = 5;
+
+        let backend = TestBackend::new(110, 34);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal.draw(|frame| draw(frame, &state)).expect("draw");
+        let cursor = terminal.get_cursor_position().expect("cursor position");
+        let buffer = terminal.backend().buffer();
+        let value_row = (0..34)
+            .find(|y| {
+                (0..110)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("demo-model")
+            })
+            .expect("model value row");
+        assert_eq!(cursor.y, value_row);
+    }
+
+    #[test]
     fn provider_form_renders_editable_values_and_curated_settings() {
         let (_home, mut state) = test_state();
         state.open_overlay(OverlayKind::Settings);
@@ -2721,6 +2941,7 @@ mod tests {
         let rendered = rendered_rows(&state, 110, 34).join("\n");
         assert!(rendered.contains("http://localhost/v1"));
         assert!(rendered.contains("demo-model"));
+        assert!(rendered.contains("◀ OpenAI Compatible ▶"));
 
         state.settings.as_mut().expect("settings").form = None;
         state.settings.as_mut().expect("settings").tab = SettingsTab::Mcp;

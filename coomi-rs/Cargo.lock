@@ -343,6 +343,7 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "clap",
  "coomi-catalogs",
  "coomi-engine",
