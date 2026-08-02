@@ -18,10 +18,18 @@ $BinaryName = "coomi.exe"
 function Write-Info { param($Msg) Write-Host "==> $Msg" -ForegroundColor Cyan }
 function Write-Err { param($Msg) Write-Host "Error: $Msg" -ForegroundColor Red; exit 1 }
 
-# Detect architecture
-$arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "X64") { "x86_64" }
-        elseif ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "aarch64" }
-        else { Write-Err "Unsupported architecture" }
+# Detect architecture — use PROCESSOR_ARCHITECTURE for robust detection across
+# PowerShell versions and environments (Conda, old Windows PowerShell 5.1, etc.)
+$procArch = $env:PROCESSOR_ARCHITECTURE
+$arch = switch ($procArch) {
+    "AMD64"  { "x86_64" }
+    "ARM64"  { "aarch64" }
+    "x86"    { "x86_64" }   # 32-bit PS on 64-bit OS
+    default  { $null }
+}
+if (-not $arch) {
+    Write-Err "Unsupported architecture: $procArch. Expected AMD64 or ARM64."
+}
 
 $target = "${arch}-pc-windows-msvc"
 
@@ -57,9 +65,17 @@ if (-not $binary) {
     Write-Err "Binary not found in archive"
 }
 
-# Install
+# Install — overwrites any previous version
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $dest = Join-Path $InstallDir $BinaryName
+if (Test-Path $dest) {
+    $existingVersion = & $dest --version 2>$null
+    if ($existingVersion) {
+        Write-Info "Upgrading from $existingVersion"
+    } else {
+        Write-Info "Overwriting existing installation at $dest"
+    }
+}
 Copy-Item $binary.FullName $dest -Force
 
 Write-Info "Installed to $dest"

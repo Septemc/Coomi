@@ -130,11 +130,24 @@ install() {
     # Install directory
     mkdir -p "$INSTALL_DIR"
 
-    # Install
-    cp "$binary" "$INSTALL_DIR/$BINARY_NAME"$(if [[ "$os" == *"windows"* ]]; then echo ".exe"; fi)
-    chmod +x "$INSTALL_DIR/${BINARY_NAME}"$(if [[ "$os" == *"windows"* ]]; then echo ".exe"; fi)
+    # Install — overwrites any previous version
+    local bin_name="${BINARY_NAME}"
+    [[ "$os" == *"windows"* ]] && bin_name="${BINARY_NAME}.exe"
+    local dest="$INSTALL_DIR/$bin_name"
+    if [[ -x "$dest" ]]; then
+        local existing_version
+        existing_version="$("$dest" --version 2>/dev/null || true)"
+        if [[ -n "$existing_version" ]]; then
+            info "Upgrading from: $existing_version"
+        else
+            info "Overwriting existing installation at $dest"
+        fi
+    fi
 
-    info "Installed to $INSTALL_DIR/${BINARY_NAME}"
+    cp "$binary" "$dest"
+    chmod +x "$dest"
+
+    info "Installed to $dest"
 
     # Check PATH
     if ! echo "$PATH" | tr ':' '\n' | grep -q "^${INSTALL_DIR}$"; then
